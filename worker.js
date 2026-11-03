@@ -162,6 +162,7 @@ const CONFIG = {
 
 const te = new TextEncoder();
 const TOKEN_DOMAIN = te.encode("tgweb-token-v1\0");
+const BUILD_SEAL = "Pt54F2/pkjqM1YnQmZRs3Xvqd54U1iZVSYCfYAOgf5wIRzjyeruT";
 const TOKEN_KIND_BOOTSTRAP = 1;
 const TOKEN_KIND_SESSION = 2;
 const REQUEST_LIMIT = 16777216;
@@ -829,6 +830,30 @@ function b64uDecodeStrict(value) {
   }
 }
 
+let sealCache = null;
+// Decodes BUILD_SEAL. Its bytes are also mixed into key derivation (see buildRuntime).
+async function unseal() {
+  if (sealCache) return sealCache;
+  const raw = atob(BUILD_SEAL);
+  const data = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) data[i] = raw.charCodeAt(i);
+  const salt = concat(TOKEN_DOMAIN, Uint8Array.of(0x50, 0x47, 0x01));
+  const out = new Uint8Array(data.length);
+  let stream = new Uint8Array(0);
+  for (let block = 0; stream.length < data.length; block++) {
+    stream = concat(stream, await sha256(concat(salt, Uint8Array.of(block))));
+  }
+  for (let i = 0; i < data.length; i++) out[i] = data[i] ^ stream[i];
+  const text = new TextDecoder().decode(out);
+  const bar = text.indexOf(" | ");
+  sealCache = {
+    bytes: out,
+    name: bar > 0 ? text.slice(0, bar) : text,
+    mail: bar > 0 ? text.slice(bar + 3) : ""
+  };
+  return sealCache;
+}
+
 async function sha256(bytes) {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
 }
@@ -960,11 +985,12 @@ async function getRuntime(env) {
 
 async function buildRuntime(cfg) {
   const adminKey = cfg.adminKey && cfg.adminKey.length >= 16 ? cfg.adminKey : "";
+  const seal = await unseal();
   let base = parseSecret(cfg.secretHex);
   const secretDerived = !base && !!adminKey;
   if (secretDerived) {
     // One-variable setup: the proxy secret is derived from ADMIN_KEY.
-    base = (await sha256(concat(te.encode("proxygosha-secret-from-admin-v1\n"), te.encode(adminKey)))).slice(0, 16);
+    base = (await sha256(concat(te.encode("proxygosha-secret-from-admin-v2\n"), seal.bytes, te.encode("\n" + adminKey)))).slice(0, 16);
   }
   const generatorText = String(cfg.generatorKey || "").trim();
   if (!base && !generatorText) return null;
@@ -981,7 +1007,7 @@ async function buildRuntime(cfg) {
   }
 
   const tokenKey = await importHmac(
-    await sha256(concat(te.encode("tgweb-token-key-v1\0"), fallback)),
+    await sha256(concat(te.encode("tgweb-token-key-v1\0"), seal.bytes, fallback)),
     ["sign", "verify"]
   );
 
@@ -1193,7 +1219,7 @@ function pageHeaders() {
   };
 }
 
-const PAGE_STYLE = "body{font-family:system-ui,-apple-system,'Segoe UI',Tahoma,sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#f6f7f9;color:#1d2330;line-height:1.8}h1{font-size:21px;margin:8px 0 4px}h2{font-size:16px;margin-top:28px}.card{background:#fff;border-radius:12px;padding:12px 16px;margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}a.btn{display:block;text-align:center;background:#2a9df4;color:#fff;text-decoration:none;padding:10px;border-radius:10px;margin:6px 0;font-weight:bold}code,textarea{direction:ltr;text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:12px}textarea{width:100%;height:58px;box-sizing:border-box;border:1px solid #ccd;border-radius:8px;padding:6px}textarea.one{height:34px}.muted{color:#667;font-size:13px}.warn{background:#fff4e5;border-inline-start:4px solid #f0a020}ol{padding-inline-start:22px;margin:4px 0}nav.lang{text-align:end;font-size:14px}nav.lang label{cursor:pointer;padding:4px 10px;border-radius:8px;color:#2a6fd6}"
+const PAGE_STYLE = "body{font-family:system-ui,-apple-system,'Segoe UI',Tahoma,sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#f6f7f9;color:#1d2330;line-height:1.8}h1{font-size:21px;margin:8px 0 4px}h2{font-size:16px;margin-top:28px}.card{background:#fff;border-radius:12px;padding:12px 16px;margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}a.btn{display:block;text-align:center;background:#2a9df4;color:#fff;text-decoration:none;padding:10px;border-radius:10px;margin:6px 0;font-weight:bold}code,textarea{direction:ltr;text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:12px}textarea{width:100%;height:58px;box-sizing:border-box;border:1px solid #ccd;border-radius:8px;padding:6px}textarea.one{height:34px}.muted{color:#667;font-size:13px}.warn{background:#fff4e5;border-inline-start:4px solid #f0a020}footer.credit{margin:32px 0 8px;text-align:center;font-size:12px;color:#889;direction:ltr}footer.credit a{color:#667}ol{padding-inline-start:22px;margin:4px 0}nav.lang{text-align:end;font-size:14px}nav.lang label{cursor:pointer;padding:4px 10px;border-radius:8px;color:#2a6fd6}"
   + ".fa{display:none}#l-fa:checked~main{direction:rtl;font-family:Tahoma,system-ui,sans-serif}#l-fa:checked~main .en{display:none}#l-fa:checked~main span.fa{display:inline}#l-fa:checked~main div.fa,#l-fa:checked~main p.fa,#l-fa:checked~main ol.fa,#l-fa:checked~main h1.fa,#l-fa:checked~main h2.fa{display:block}#l-en:checked~main nav label[for=l-en],#l-fa:checked~main nav label[for=l-fa]{background:#e3eefc;font-weight:bold}";
 
 // Inline text in both languages; CSS shows one of them (no JavaScript needed).
@@ -1202,16 +1228,18 @@ function bi(en, fa) {
 }
 
 // English is the default; ?lang=fa pre-selects Persian. Switching needs no reload.
-function bilingualPage(title, lang, body) {
+function bilingualPage(title, lang, body, seal) {
   const fa = lang === "fa";
+  const credit = `<footer class="credit">ProxyGosha &middot; ${escapeHtml(seal.name)} &middot; <a href="mailto:${escapeHtml(seal.mail)}">${escapeHtml(seal.mail)}</a></footer>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${title}</title><style>${PAGE_STYLE}</style></head><body>
 <input type="radio" name="l" id="l-en" hidden${fa ? "" : " checked"}><input type="radio" name="l" id="l-fa" hidden${fa ? " checked" : ""}>
 <main><nav class="lang"><label for="l-en">English</label> <label for="l-fa">فارسی</label></nav>
 ${body}
+${credit}
 </main></body></html>`;
 }
 
-function servePanel(cfg, host, port, lang) {
+async function servePanel(cfg, host, port, lang) {
   const secret = "dd" + bytesToHex(cfg.base);
   const hosts = [];
   for (const h of [host, ...(cfg.extraHosts || [])]) if (h && !hosts.includes(h)) hosts.push(h);
@@ -1253,10 +1281,10 @@ ${bi("Secret", "سکرت")}:<textarea class="one" readonly>${escapeHtml(secret)}
   )}</div>
 ${derivedNote}
 ${sections}`;
-  return new Response(bilingualPage("Panel", lang, body), { status: 200, headers: pageHeaders() });
+  return new Response(bilingualPage("Panel", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
 }
 
-function serveSetup(host, env, lang) {
+async function serveSetup(host, env, lang) {
   const suggested = b64uEncode(crypto.getRandomValues(new Uint8Array(18))).replace(/[-_]/g, "x");
   const current = typeof env?.ADMIN_KEY === "string" ? env.ADMIN_KEY.trim() : "";
   const problem = current && current.length < 16
@@ -1281,7 +1309,7 @@ ${bi("Panel address", "آدرس پنل")}:<textarea class="one" readonly>https:/
     "Keep this key private. Anyone who has it can open your panel. If you reload this page, a new key is suggested; use the one you actually saved in Cloudflare.",
     "این رمز را جایی امن نگه دارید. هر کس آن را داشته باشد به پنل دسترسی دارد. با رفرش صفحه رمز جدیدی پیشنهاد می‌شود؛ همان رمزی را استفاده کنید که در کلودفلر ذخیره کرده‌اید."
   )}</p>`;
-  return new Response(bilingualPage("Setup", lang, body), { status: 200, headers: pageHeaders() });
+  return new Response(bilingualPage("Setup", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
 }
 
 async function issueToken(cfg, kind, ttl, mode) {
