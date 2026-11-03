@@ -1193,9 +1193,25 @@ function pageHeaders() {
   };
 }
 
-const PAGE_STYLE = "body{font-family:Tahoma,system-ui,sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#f6f7f9;color:#1d2330;line-height:1.9}h1{font-size:20px}h2{font-size:16px;margin-top:28px}.card{background:#fff;border-radius:12px;padding:12px 16px;margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}a.btn{display:block;text-align:center;background:#2a9df4;color:#fff;text-decoration:none;padding:10px;border-radius:10px;margin:6px 0;font-weight:bold}code,textarea{direction:ltr;text-align:left;font-family:monospace;font-size:12px}textarea{width:100%;height:58px;box-sizing:border-box;border:1px solid #ccd;border-radius:8px;padding:6px}.muted{color:#667;font-size:13px}.warn{background:#fff4e5;border-right:4px solid #f0a020}";
+const PAGE_STYLE = "body{font-family:system-ui,-apple-system,'Segoe UI',Tahoma,sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#f6f7f9;color:#1d2330;line-height:1.8}h1{font-size:21px;margin:8px 0 4px}h2{font-size:16px;margin-top:28px}.card{background:#fff;border-radius:12px;padding:12px 16px;margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}a.btn{display:block;text-align:center;background:#2a9df4;color:#fff;text-decoration:none;padding:10px;border-radius:10px;margin:6px 0;font-weight:bold}code,textarea{direction:ltr;text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:12px}textarea{width:100%;height:58px;box-sizing:border-box;border:1px solid #ccd;border-radius:8px;padding:6px}textarea.one{height:34px}.muted{color:#667;font-size:13px}.warn{background:#fff4e5;border-inline-start:4px solid #f0a020}ol{padding-inline-start:22px;margin:4px 0}nav.lang{text-align:end;font-size:14px}nav.lang label{cursor:pointer;padding:4px 10px;border-radius:8px;color:#2a6fd6}"
+  + ".fa{display:none}#l-fa:checked~main{direction:rtl;font-family:Tahoma,system-ui,sans-serif}#l-fa:checked~main .en{display:none}#l-fa:checked~main span.fa{display:inline}#l-fa:checked~main div.fa,#l-fa:checked~main p.fa,#l-fa:checked~main ol.fa,#l-fa:checked~main h1.fa,#l-fa:checked~main h2.fa{display:block}#l-en:checked~main nav label[for=l-en],#l-fa:checked~main nav label[for=l-fa]{background:#e3eefc;font-weight:bold}";
 
-function servePanel(cfg, host, port) {
+// Inline text in both languages; CSS shows one of them (no JavaScript needed).
+function bi(en, fa) {
+  return `<span class="en">${en}</span><span class="fa">${fa}</span>`;
+}
+
+// English is the default; ?lang=fa pre-selects Persian. Switching needs no reload.
+function bilingualPage(title, lang, body) {
+  const fa = lang === "fa";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${title}</title><style>${PAGE_STYLE}</style></head><body>
+<input type="radio" name="l" id="l-en" hidden${fa ? "" : " checked"}><input type="radio" name="l" id="l-fa" hidden${fa ? " checked" : ""}>
+<main><nav class="lang"><label for="l-en">English</label> <label for="l-fa">فارسی</label></nav>
+${body}
+</main></body></html>`;
+}
+
+function servePanel(cfg, host, port, lang) {
   const secret = "dd" + bytesToHex(cfg.base);
   const hosts = [];
   for (const h of [host, ...(cfg.extraHosts || [])]) if (h && !hosts.includes(h)) hosts.push(h);
@@ -1203,45 +1219,69 @@ function servePanel(cfg, host, port) {
     const workersDev = h.endsWith(".workers.dev");
     const items = HTTPS_PORTS.map((p) => {
       const link = "tg://webproxy?server=" + encodeURIComponent(h) + (p !== 443 ? "&port=" + p : "") + "&secret=" + secret;
-      return `<div class="card"><b>پورت ${p}</b>${p === 443 ? " (پیش‌فرض)" : ""}<a class="btn" href="${escapeHtml(link)}">اتصال در تلگرام</a><textarea readonly>${escapeHtml(link)}</textarea></div>`;
+      return `<div class="card"><b>${bi("Port", "پورت")} ${p}</b>${p === 443 ? " " + bi("(default)", "(پیش‌فرض)") : ""}<a class="btn" href="${escapeHtml(link)}">${bi("Connect in Telegram", "اتصال در تلگرام")}</a><textarea readonly>${escapeHtml(link)}</textarea></div>`;
     }).join("");
     const note = workersDev
-      ? `<p class="muted">آدرس workers.dev معمولاً در ایران فیلتر است و ممکن است بعضی پورت‌ها رویش باز نباشند. بهتر است یک دامنه شخصی (Custom Domain) به ورکر وصل کنید.</p>`
+      ? `<p class="muted">${bi(
+          "workers.dev addresses are often filtered in Iran, and some ports may not open on them. Attach a custom domain to this Worker for the best results.",
+          "آدرس workers.dev معمولاً در ایران فیلتر است و ممکن است بعضی پورت‌ها رویش باز نباشند. بهتر است یک دامنه شخصی (Custom Domain) به ورکر وصل کنید."
+        )}</p>`
       : "";
-    const manual = `<div class="card"><b>ورود دستی در تلگرام</b>: در تنظیمات پروکسی تلگرام یک پروکسی جدید از نوع WEB اضافه کنید و این‌ها را وارد کنید:<br>
-سرور:<textarea readonly style="height:34px">${escapeHtml(h)}</textarea>
-پورت: یکی از <code>${HTTPS_PORTS.join("، ")}</code><br>
-سکرت:<textarea readonly style="height:34px">${escapeHtml(secret)}</textarea></div>`;
+    const manual = `<div class="card"><b>${bi("Manual entry", "ورود دستی")}</b> — ${bi(
+        "in Telegram's proxy settings, add a new proxy of type <b>WEB</b> and enter:",
+        "در تنظیمات پروکسی تلگرام یک پروکسی جدید از نوع <b>WEB</b> اضافه کنید و این‌ها را وارد کنید:"
+      )}<br>
+${bi("Server", "سرور")}:<textarea class="one" readonly>${escapeHtml(h)}</textarea>
+${bi("Port: any one of", "پورت: یکی از")} <code>${HTTPS_PORTS.join(" · ")}</code><br>
+${bi("Secret", "سکرت")}:<textarea class="one" readonly>${escapeHtml(secret)}</textarea></div>`;
     return `<h2>${escapeHtml(h)}</h2>${note}${manual}${items}`;
   }).join("");
   const derivedNote = cfg.secretDerived
-    ? `<div class="card warn">سکرت از ADMIN_KEY ساخته شده است. اگر ADMIN_KEY را عوض کنید، همه لینک‌های قبلی از کار می‌افتند.</div>`
+    ? `<div class="card warn">${bi(
+        "Your proxy secret is derived from ADMIN_KEY. Changing ADMIN_KEY changes the secret and breaks every link you have shared. To avoid this, also set a fixed SECRET variable.",
+        "سکرت پروکسی از ADMIN_KEY ساخته شده است. اگر ADMIN_KEY را عوض کنید، سکرت هم عوض می‌شود و همه لینک‌هایی که فرستاده‌اید از کار می‌افتند. برای جلوگیری، یک متغیر SECRET ثابت هم تنظیم کنید."
+      )}</div>`
     : "";
-  const html = `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Panel</title><style>${PAGE_STYLE}</style></head><body>
-<h1>پنل پروکسی</h1>
-<div class="card">روی دکمه «اتصال در تلگرام» بزنید تا پروکسی به تلگرام اضافه شود. اگر یک پورت وصل نشد، پورت دیگری را امتحان کنید. می‌توانید چند لینک را با هم اضافه کنید.</div>
-<div class="card warn">این صفحه را با کسی به اشتراک نگذارید؛ فقط لینک‌ها را بفرستید.</div>
+  const body = `<h1>${bi("Proxy panel", "پنل پروکسی")}</h1>
+<div class="card">${bi(
+    "Tap <b>Connect in Telegram</b> to add the proxy. If a port does not connect, try another one. You can add several ports at once and switch between them in Telegram.",
+    "روی «اتصال در تلگرام» بزنید تا پروکسی اضافه شود. اگر یک پورت وصل نشد، پورت دیگری را امتحان کنید. می‌توانید چند پورت را با هم اضافه کنید و در تلگرام بینشان جابه‌جا شوید."
+  )}</div>
+<div class="card warn">${bi(
+    "Do not share this page. Share only the links, or the server, port and secret.",
+    "این صفحه را با کسی به اشتراک نگذارید. فقط لینک‌ها یا سرور، پورت و سکرت را بفرستید."
+  )}</div>
 ${derivedNote}
-${sections}
-</body></html>`;
-  return new Response(html, { status: 200, headers: pageHeaders() });
+${sections}`;
+  return new Response(bilingualPage("Panel", lang, body), { status: 200, headers: pageHeaders() });
 }
 
-function serveSetup(host, env) {
+function serveSetup(host, env, lang) {
   const suggested = b64uEncode(crypto.getRandomValues(new Uint8Array(18))).replace(/[-_]/g, "x");
   const current = typeof env?.ADMIN_KEY === "string" ? env.ADMIN_KEY.trim() : "";
   const problem = current && current.length < 16
-    ? `<div class="card warn">ADMIN_KEY فعلی کوتاه است (حداقل ۱۶ کاراکتر لازم است).</div>`
+    ? `<div class="card warn">${bi(
+        "Your current ADMIN_KEY is too short. It must be at least 16 characters.",
+        "ADMIN_KEY فعلی کوتاه است. حداقل ۱۶ کاراکتر لازم است."
+      )}</div>`
     : "";
-  const html = `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Setup</title><style>${PAGE_STYLE}</style></head><body>
-<h1>راه‌اندازی پروکسی</h1>${problem}
-<div class="card">۱. در داشبورد کلودفلر: Workers &amp; Pages ← این ورکر ← Settings ← Variables and Secrets<br>
-۲. روی Add بزنید. نام: <code>ADMIN_KEY</code> ، مقدار: رمز زیر (یا هر رمز ۱۶+ حرفی از حروف و اعداد انگلیسی)<textarea readonly>${escapeHtml(suggested)}</textarea>
-۳. Deploy را بزنید.<br>
-۴. این آدرس را باز کنید تا لینک‌های تلگرام را ببینید:<textarea readonly>https://${escapeHtml(host)}/${escapeHtml(suggested)}</textarea></div>
-<p class="muted">این رمز را جایی امن نگه دارید. هر کس آن را داشته باشد به پنل دسترسی دارد.</p>
-</body></html>`;
-  return new Response(html, { status: 200, headers: pageHeaders() });
+  const body = `<h1>${bi("Proxy setup", "راه‌اندازی پروکسی")}</h1>${problem}
+<div class="card">
+<ol class="en"><li>In the Cloudflare dashboard, open <b>Workers &amp; Pages</b> → this Worker → <b>Settings</b> → <b>Variables and Secrets</b>.</li>
+<li>Click <b>Add</b>. Name: <code>ADMIN_KEY</code>. Value: the key below (or any password of 16+ English letters and digits).</li>
+<li>Click <b>Deploy</b>.</li>
+<li>Open the address below to reach your panel with ready Telegram links.</li></ol>
+<ol class="fa"><li>در داشبورد کلودفلر: <b>Workers &amp; Pages</b> ← این ورکر ← <b>Settings</b> ← <b>Variables and Secrets</b></li>
+<li>روی <b>Add</b> بزنید. نام: <code>ADMIN_KEY</code> ، مقدار: رمز زیر (یا هر رمز ۱۶+ حرفی از حروف و اعداد انگلیسی)</li>
+<li><b>Deploy</b> را بزنید.</li>
+<li>آدرس زیر را باز کنید تا پنل و لینک‌های آماده تلگرام را ببینید.</li></ol>
+${bi("Suggested key", "رمز پیشنهادی")}:<textarea class="one" readonly>${escapeHtml(suggested)}</textarea>
+${bi("Panel address", "آدرس پنل")}:<textarea class="one" readonly>https://${escapeHtml(host)}/${escapeHtml(suggested)}</textarea></div>
+<p class="muted">${bi(
+    "Keep this key private. Anyone who has it can open your panel. If you reload this page, a new key is suggested; use the one you actually saved in Cloudflare.",
+    "این رمز را جایی امن نگه دارید. هر کس آن را داشته باشد به پنل دسترسی دارد. با رفرش صفحه رمز جدیدی پیشنهاد می‌شود؛ همان رمزی را استفاده کنید که در کلودفلر ذخیره کرده‌اید."
+  )}</p>`;
+  return new Response(bilingualPage("Setup", lang, body), { status: 200, headers: pageHeaders() });
 }
 
 async function issueToken(cfg, kind, ttl, mode) {
@@ -1278,14 +1318,14 @@ async function decoy(decoyUrl, requestMethod = "GET") {
         status: upstream.status,
         headers: {
           "Content-Type": upstream.headers.get("Content-Type") || "text/html; charset=utf-8",
-          "Cache-Control": "public, max-age=3600"
+          "Cache-Control": "no-cache"
         }
       });
     } catch (_) {}
   }
   const headers = {
     "Content-Type": "text/html; charset=utf-8",
-    "Cache-Control": "public, max-age=3600",
+    "Cache-Control": "no-cache",
     "X-Content-Type-Options": "nosniff",
     "Vary": "Accept-Encoding"
   };
@@ -1941,11 +1981,15 @@ export default {
       const port = portMatch ? portMatch[1] : (url.port || "");
 
       const cfg = await getRuntime(env);
+      const lang = url.searchParams.get("lang") === "fa" ? "fa" : "en";
       // Not configured yet: show a step-by-step setup page (nothing to protect yet).
-      if (!cfg) return serveSetup(host, env);
+      if (!cfg) return serveSetup(host, env, lang);
+      // Configured with SECRET only (older setup, no ADMIN_KEY yet): the site stays
+      // camouflaged, but /setup explains how to add ADMIN_KEY. It reveals no secret.
+      if (!cfg.adminKey && url.pathname === "/setup") return serveSetup(host, env, lang);
 
       // Admin panel: https://host/<ADMIN_KEY>  (or legacy ?create-secret&key=<ADMIN_KEY>)
-      if (request.method === "GET" && panelRequested(url, cfg)) return servePanel(cfg, host, port);
+      if (request.method === "GET" && panelRequested(url, cfg)) return servePanel(cfg, host, port, lang);
 
       // Legacy per-domain secret generator (ACCEPT_GENERATED); also gated by ADMIN_KEY.
       const label = generatorLabel(url);
