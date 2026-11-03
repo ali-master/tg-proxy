@@ -76,9 +76,13 @@ import { connect } from "cloudflare:sockets";
  *    - Connection Model: Session-scoped connections (Option 1). Each client WebSocket
  *      owns its DC TCP sockets. Avoids Durable Objects complexity, requires zero dashboard
  *      bindings, and runs 100% on the Free plan.
- *    - Free Plan Limits: 10ms CPU time per subrequest, 50 subrequests per invocation,
- *      128 MB RAM. WebSockets remain open while active but may be terminated when idle
- *      or during edge isolate recycling (TDesktop re-establishes session automatically).
+ *    - Free Plan Limits (per incoming request / WebSocket invocation): 10 ms CPU time,
+ *      50 subrequests, 6 connections in the "connecting" phase; 128 MB memory per
+ *      isolate (shared by every session running in that isolate), 100k requests/day.
+ *    - Default carrier is "websocket-lanes": every MTProto stream gets its own
+ *      WebSocket, i.e. its own invocation with its own CPU/subrequest budget.
+ *    - Fast mode: the DC-side obfuscation keys are chosen so DC->client bytes are
+ *      forwarded without any re-encryption (download direction costs ~0 CPU).
  *
  * 6. UNVERIFIED Aspects:
  *    - [UNVERIFIED] Whether Cloudflare will in the future expose localPort on SocketInfo
@@ -111,7 +115,7 @@ const CONFIG = {
   hostnames: ["*"],             // Overridden by env.HOSTNAME (comma-separated or '*')
   debug: false,                 // Overridden by env.DEBUG ("true" or "1")
 
-  generatorEnabled: true,
+  generatorEnabled: false,      // Secret page is OFF by default (it used to leak SECRET publicly)
   generatorKey: "",             // Optional custom seed for secret derivation
   acceptGenerated: false,
 
@@ -125,7 +129,7 @@ const CONFIG = {
   },
   dcPort: 443,
   dcPorts: [443, 80, 5222],
-  carrier: "websocket",
+  carrier: "websocket-lanes",   // "websocket-lanes" (one WS per stream) or "websocket" (all streams in one WS)
   sessionPath: "/api/v1/session",
   wsPath: "/api/v1/ws",
   batchBytes: 2097152,
@@ -330,7 +334,16 @@ const pending=[],upPending=[],lanes=new Map(),closedLanes=new Set(),closedLaneOr
 const queueLimit=33554432,queueItemLimit=16384,closedLaneLimit=4096;
 const laneQueueLimit=8388608,laneItemLimit=1024,batchLimit=__BATCH_LIMIT__;
 let upSequence=1,downCursor='0',upRunning=false;
-let pingTimer=0,reconnectAttempts=0;
+let pingTimer=0,reconnectAttempts=0,reconnecting=false;
+const openStreams=new Set();
+function trackFrames(value,up){
+ const view=new DataView(value);let offset=0;
+ while(value.byteLength-offset>=8){
+  const type=view.getUint8(offset),id=(view.getUint8(offset+1)<<16)|(view.getUint8(offset+2)<<8)|view.getUint8(offset+3);
+  if(id){if(up&&type===1)openStreams.add(id);else if(type===3)openStreams.delete(id)}
+  offset+=8+view.getUint32(offset+4);
+ }
+}
 function startHeartbeat(){
  if(pingTimer)clearInterval(pingTimer);
  pingTimer=setInterval(()=>{
@@ -566,7 +579,9 @@ function openWebSocket(){
  return new Promise((resolve,reject)=>{
   const target=relayBase.replace(/^https:/,'wss:')+wsPath,socket=new WebSocket(target,'tproxy-v1.'+sessionToken);
   webSocket=socket;socket.binaryType='arraybuffer';
+  let opened=false;
   socket.onopen=()=>{
+   opened=true;
    startHeartbeat();
    resolve();
   };
@@ -586,26 +601,39 @@ function openWebSocket(){
      if(type===6)return;
     }
    }
+   try{trackFrames(event.data,false)}catch(_){}
    port.postMessage({t:'traffic',up:0,down:event.data.byteLength});port.postMessage(event.data,[event.data]);status('connected');
   };
   socket.onerror=()=>reject(new Error('websocket failed'));
   socket.onclose=()=>{
-   if(closed)return;
-   stopHeartbeat();
-   status('reconnecting');
-   const delay=Math.min(1000*Math.pow(1.5,Math.min(reconnectAttempts,8)),10000);
-   reconnectAttempts++;
-   setTimeout(()=>{
-    if(closed)return;
-    openWebSocket().then(()=>{reconnectAttempts=0;status('connected');runWebSocketUp();}).catch(()=>{
-     if(reconnectAttempts>=12){fail()}
-     else if(socket.onclose)socket.onclose();
-    });
-   },delay);
+   if(closed||webSocket!==socket||!opened)return;
+   scheduleReconnect();
   };
  });
 }
+function scheduleReconnect(){
+ if(closed||reconnecting)return;
+ reconnecting=true;stopHeartbeat();status('reconnecting');
+ // The server-side session (DC sockets + cipher state) died with the old socket.
+ // Close those streams towards Telegram so it reopens them at once instead of hanging,
+ // and drop uplink bytes that belong to the dead streams.
+ for(const id of openStreams){const frame=closeFrame(id);port.postMessage(frame,[frame])}
+ openStreams.clear();
+ if(upPending.length){let bytes=0;for(const data of upPending)bytes+=data.byteLength;release(bytes,upPending.length,null);upPending.length=0}
+ const attempt=()=>{
+  if(closed)return;
+  if(reconnectAttempts>=12){fail();return}
+  const delay=Math.min(1000*Math.pow(1.5,Math.min(reconnectAttempts,8)),10000);
+  reconnectAttempts++;
+  setTimeout(()=>{
+   if(closed)return;
+   openWebSocket().then(()=>{reconnecting=false;reconnectAttempts=0;status('connected');runWebSocketUp()}).catch(attempt);
+  },delay);
+ };
+ attempt();
+}
 function queueWebSocket(data){
+ trackFrames(data,true);
  if(!reserve(data,null)){fail();return}
  upPending.push(data);runWebSocketUp();
 }
@@ -859,6 +887,9 @@ function resolveConfig(env) {
     ? (env.WS_PATH.trim().startsWith("/") ? env.WS_PATH.trim() : "/" + env.WS_PATH.trim())
     : CONFIG.wsPath;
 
+  const carrierEnv = (typeof env?.CARRIER === "string" ? env.CARRIER.trim().toLowerCase() : "");
+  const carrier = carrierEnv === "websocket" || carrierEnv === "websocket-lanes" ? carrierEnv : CONFIG.carrier;
+
   return {
     secretHex,
     adTagHex,
@@ -874,7 +905,7 @@ function resolveConfig(env) {
     dc: CONFIG.dc,
     dcPort: CONFIG.dcPort,
     dcPorts: CONFIG.dcPorts,
-    carrier: CONFIG.carrier,
+    carrier,
     batchBytes: CONFIG.batchBytes,
     bootstrapTtl: CONFIG.bootstrapTtl,
     sessionTtl: CONFIG.sessionTtl,
@@ -889,7 +920,7 @@ let cachedKey = null;
 
 async function getRuntime(env) {
   const resolved = resolveConfig(env);
-  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}`;
+  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}`;
   if (cachedRuntime && cachedKey === cacheKey) {
     return cachedRuntime;
   }
@@ -989,7 +1020,8 @@ async function bridgeMode(cfg, host, capability, port) {
     candidateHosts.push(`${host}:${port}`);
   }
 
-  for (const h of candidateHosts) {
+  for (let index = 0; index < candidateHosts.length; index++) {
+    const h = candidateHosts[index];
     const context = te.encode("tdesktop-web-proxy-bridge-v1\n" + h);
     for (const key of cfg.bridgeKeys) {
       if (await crypto.subtle.verify("HMAC", key, provided, context)) return 0;
@@ -998,11 +1030,20 @@ async function bridgeMode(cfg, host, capability, port) {
       const secret = await deriveSecret(cfg, h);
       if (secret) {
         const key = await importHmac(secret, ["verify"]);
-        if (await crypto.subtle.verify("HMAC", key, provided, context)) return 1;
+        // mode 1 = secret derived from host, mode 2 = derived from host:port
+        if (await crypto.subtle.verify("HMAC", key, provided, context)) return index === 0 ? 1 : 2;
       }
     }
   }
   return -1;
+}
+
+function safeEqual(a, b) {
+  const x = te.encode(String(a));
+  const y = te.encode(String(b));
+  let diff = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] || 0) ^ (y[i] || 0);
+  return diff === 0;
 }
 
 function generatorLabel(url) {
@@ -1032,8 +1073,8 @@ async function serveSecret(cfg, host, label, port) {
       if (derived) hex = bytesToHex(derived);
     }
     if (!hex) {
-      const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", te.encode("tgweb-secret-v1\n" + cleanLabel)));
-      hex = bytesToHex(hash.subarray(0, 16));
+      // No server-side key: an unkeyed hash of a public domain name would be guessable by anyone.
+      hex = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
     }
   } else if (cfg && cfg.base) {
     hex = bytesToHex(cfg.base);
@@ -1094,7 +1135,7 @@ async function serveSecret(cfg, host, label, port) {
 async function issueToken(cfg, kind, ttl, mode) {
   const nonce = new Uint8Array(16);
   new DataView(nonce.buffer).setUint32(0, Math.floor(Date.now() / 1000) + ttl, false);
-  nonce[4] = mode === 1 ? 1 : 0;
+  nonce[4] = mode === 1 || mode === 2 ? mode : 0;
   crypto.getRandomValues(nonce.subarray(5));
   const mac = new Uint8Array(await crypto.subtle.sign("HMAC", cfg.tokenKey, concat(TOKEN_DOMAIN, Uint8Array.of(kind), nonce)));
   return b64uEncode(concat(nonce, mac));
@@ -1109,7 +1150,7 @@ async function verifyToken(cfg, token, kind) {
   if (!ok) return null;
   const expires = new DataView(nonce.buffer, nonce.byteOffset, 4).getUint32(0, false);
   if (expires < Math.floor(Date.now() / 1000)) return null;
-  return { nonce, mode: nonce[4] === 1 ? 1 : 0 };
+  return { nonce, mode: nonce[4] === 1 || nonce[4] === 2 ? nonce[4] : 0 };
 }
 
 async function decoy(decoyUrl, requestMethod = "GET") {
@@ -1134,7 +1175,6 @@ async function decoy(decoyUrl, requestMethod = "GET") {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "public, max-age=3600",
     "X-Content-Type-Options": "nosniff",
-    "ETag": '"luxveil-aw2026-v1"',
     "Vary": "Accept-Encoding"
   };
   if (requestMethod === "HEAD") {
@@ -1346,41 +1386,56 @@ class Stream {
 
     const reversed = reverse(header.subarray(8, 56));
     const writeKey = await sha256(concat(reversed.subarray(0, 32), this.session.secret));
-    this.clientWriteKey = await importAes(writeKey);
-    this.clientWriteIv = reversed.slice(32, 48);
-    this.dcWriteKey = await importAes(header.slice(8, 40));
-    this.dcWriteIv = header.slice(40, 56);
-    this.dcReadKey = await importAes(reversed.slice(0, 32));
-    this.dcReadIv = reversed.slice(32, 48);
+    const clientWriteIv = reversed.slice(32, 48);
+
+    // FAST MODE (same idea as mtprotoproxy FAST_MODE):
+    // The DC derives its *encrypt* key/iv from reverse(dcHeader[8..56]). We choose
+    // dcHeader[8..56] = reverse(clientWriteKey || clientWriteIv), so the DC encrypts
+    // with exactly the key stream the client expects. DC->client bytes are then
+    // forwarded untouched: no AES work for the heavy (download) direction.
+    const dcKeyMaterial = reverse(concat(writeKey, clientWriteIv)); // 48 bytes
+    this.dcWriteKey = await importAes(dcKeyMaterial.slice(0, 32));
+    this.dcWriteIv = dcKeyMaterial.slice(32, 48);
     if (this.dead) return;
     this.clientReadPos = 64;
     this.clientWritePos = 0;
     this.dcWritePos = 64;
     this.dcReadPos = 0;
 
-    // Connect directly to the target Telegram Data Center with multi-IP and port failover
+    // Connect to the DC with bounded failover. Every connect() is a subrequest
+    // (50 per invocation on Free) and occupies one of the 6 "connecting" slots,
+    // so: few attempts, random IP order (spreads load), and always close losers.
     let socket = null;
     let lastError = null;
+    const ips = candidateIps.slice();
+    for (let i = ips.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ips[i], ips[j]] = [ips[j], ips[i]];
+    }
+    const attempts = [];
+    for (const port of candidatePorts) for (const hostIp of ips) attempts.push([hostIp, port]);
+    const maxAttempts = Math.min(attempts.length, 4);
 
-    for (const hostIp of candidateIps) {
-      for (const port of candidatePorts) {
-        if (this.dead) return;
-        try {
-          const candidateSocket = connect({ hostname: hostIp, port }, { secureTransport: "off" });
-          candidateSocket.closed.catch(() => {});
-          let timer = null;
-          const timeoutPromise = new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error("connect timeout")), 3500);
-          });
-          await Promise.race([candidateSocket.opened, timeoutPromise]);
-          clearTimeout(timer);
-          socket = candidateSocket;
-          break;
-        } catch (connErr) {
-          lastError = connErr;
-        }
+    for (let a = 0; a < maxAttempts && !socket; a++) {
+      if (this.dead) return;
+      const [hostIp, port] = attempts[a];
+      let candidateSocket = null;
+      let timer = null;
+      try {
+        candidateSocket = connect({ hostname: hostIp, port }, { secureTransport: "off" });
+        candidateSocket.closed.catch(() => {});
+        const timeoutPromise = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("connect timeout")), 3000);
+        });
+        await Promise.race([candidateSocket.opened, timeoutPromise]);
+        socket = candidateSocket;
+      } catch (connErr) {
+        lastError = connErr;
+        // Previously a timed-out socket stayed pending and kept a connection slot busy.
+        if (candidateSocket) { try { candidateSocket.close().catch(() => {}); } catch (_) {} }
+      } finally {
+        if (timer) clearTimeout(timer);
       }
-      if (socket) break;
     }
 
     if (!socket) {
@@ -1403,7 +1458,7 @@ class Stream {
       safe = safeDcHeaderPrefix(dcHeader);
     }
     if (!safe) dcHeader.set([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0], 0);
-    dcHeader.set(header.subarray(8, 56), 8);
+    dcHeader.set(dcKeyMaterial, 8);
     dcHeader.set(tag, 56);
     const dcView = new DataView(dcHeader.buffer);
     dcView.setInt16(60, dcId, true);
@@ -1446,13 +1501,10 @@ class Stream {
           }
           const size = Math.min(value.length - offset, this.sendCredit, this.session.cfg.dataChunk);
           if (size <= 0) continue;
+          // Fast mode: bytes from the DC are already encrypted for the client.
           const chunk = value.subarray(offset, offset + size);
-          const plain = await ctrAt(this.dcReadKey, this.dcReadIv, this.dcReadPos, chunk);
-          this.dcReadPos += size;
-          const encrypted = await ctrAt(this.clientWriteKey, this.clientWriteIv, this.clientWritePos, plain);
-          this.clientWritePos += size;
           this.sendCredit -= size;
-          this.session.sendFrame(frame(0x02, this.id, encrypted));
+          this.session.sendFrame(frame(0x02, this.id, chunk));
           offset += size;
         }
       }
@@ -1511,11 +1563,14 @@ class Stream {
       this.socket = null;
     }
     if (notify && !this.session.closed) this.session.sendFrame(frame(0x03, this.id, EMPTY));
+    this.session.onStreamClosed(this.id);
   }
 }
 
 class WsSession {
-  constructor(ws, cfg, secret) {
+  constructor(ws, cfg, secret, laneId = 0) {
+    this.laneId = laneId; // > 0: this WebSocket carries exactly one stream (websocket-lanes)
+    this.laneUsed = false;
     this.ws = ws;
     this.cfg = cfg;
     this.secret = secret;
@@ -1530,7 +1585,9 @@ class WsSession {
 
     // Periodic KeepAlive Heartbeat (every 25s)
     // Prevents Cloudflare 100s idle disconnect and ISP/TSPU DPI idle RST injection
-    this.keepAliveTimer = setInterval(() => {
+    // Lane sockets must not receive id-0 frames (the bridge rejects cross-lane ids);
+    // MTProto's own pings keep a lane busy.
+    this.keepAliveTimer = laneId ? null : setInterval(() => {
       if (this.closed || !this.ws || this.ws.readyState !== 1) {
         if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
         return;
@@ -1550,6 +1607,13 @@ class WsSession {
     } catch (_) {
       this.dispose();
     }
+  }
+
+  onStreamClosed(id) {
+    if (!this.laneId || this.closed || id !== this.laneId) return;
+    // Lane finished: close this WebSocket so the invocation (and its budget) ends.
+    this.dispose();
+    try { if (this.ws.readyState === 1) this.ws.close(1000, "done"); } catch (_) {}
   }
 
   remember(id) {
@@ -1592,11 +1656,21 @@ class WsSession {
       }
       const payload = bytes.subarray(offset + 8, end);
       offset = end;
+      if (this.laneId && id !== this.laneId) {
+        this.shutdown();
+        return;
+      }
       if (type === 0x01) {
         // OPEN frame
         if (id === 0 || size !== 0) {
           this.shutdown();
           return;
+        }
+        if (this.laneId) {
+          if (this.laneUsed) { this.shutdown(); return; }
+          this.laneUsed = true;
+          this.streams.set(id, new Stream(this, id));
+          continue;
         }
         if (this.streams.has(id) || this.tombstones.has(id) || this.streams.size >= this.cfg.maxStreams) {
           this.sendFrame(frame(0x03, id, EMPTY));
@@ -1682,7 +1756,7 @@ async function serveSession(request, cfg) {
   if ((request.headers.get("content-type") || "").toLowerCase() !== "application/octet-stream") return notFound();
   const verified = await verifyToken(cfg, token, TOKEN_KIND_BOOTSTRAP);
   if (!verified) return notFound();
-  if (verified.mode === 1 && !cfg.acceptGenerated) return notFound();
+  if (verified.mode !== 0 && !cfg.acceptGenerated) return notFound();
   const body = new Uint8Array(await request.arrayBuffer());
   if (body.length !== 9) return notFound();
   if (body[0] !== 0x10 || body[1] !== 0 || body[2] !== 0 || body[3] !== 0) return notFound();
@@ -1700,25 +1774,39 @@ async function serveSession(request, cfg) {
   });
 }
 
-async function serveWebSocket(request, cfg, host) {
+async function serveWebSocket(request, cfg, host, port) {
   if (request.method !== "GET") return notFound();
   if ((request.headers.get("upgrade") || "").toLowerCase() !== "websocket") return notFound();
   if (request.headers.get("authorization")) return notFound();
   const offered = (request.headers.get("sec-websocket-protocol") || "").split(",").map((value) => value.trim()).filter(Boolean);
-  if (offered.length !== 1 || !offered[0].startsWith("tproxy-v1.")) return notFound();
+  if (offered.length !== 1) return notFound();
   const protocol = offered[0];
-  const token = protocol.substring(10);
+  let token = "";
+  let laneId = 0;
+  if (protocol.startsWith("tproxy-v1.")) {
+    token = protocol.substring(10);
+  } else if (protocol.startsWith("tproxy-lane-v1.")) {
+    const rest = protocol.substring(15);
+    const dot = rest.lastIndexOf(".");
+    if (dot <= 0 || !/^[1-9][0-9]{0,7}$/.test(rest.substring(dot + 1))) return notFound();
+    token = rest.substring(0, dot);
+    laneId = parseInt(rest.substring(dot + 1), 10);
+    if (laneId > 0xffffff) return notFound();
+  } else {
+    return notFound();
+  }
   const verified = await verifyToken(cfg, token, TOKEN_KIND_SESSION);
   if (!verified) return notFound();
-  if (verified.mode === 1 && !cfg.acceptGenerated) return notFound();
-  const secret = verified.mode === 1 ? await deriveSecret(cfg, host) : cfg.base;
+  if (verified.mode !== 0 && !cfg.acceptGenerated) return notFound();
+  const label = verified.mode === 2 && port && port !== "443" && port !== "80" ? `${host}:${port}` : host;
+  const secret = verified.mode !== 0 ? await deriveSecret(cfg, label) : cfg.base;
   if (!secret) return notFound();
   const pair = new WebSocketPair();
   const client = pair[0];
   const server = pair[1];
   server.binaryType = "arraybuffer";
   server.accept();
-  const session = new WsSession(server, cfg, secret);
+  const session = new WsSession(server, cfg, secret, laneId);
   server.addEventListener("message", (event) => session.enqueue(event.data));
   server.addEventListener("close", () => session.dispose());
   server.addEventListener("error", () => session.dispose());
@@ -1743,11 +1831,20 @@ export default {
       // Check secret generator BEFORE checking cfg, so fresh deployments without env.SECRET can generate one!
       const label = generatorLabel(url);
       if (label !== null) {
+        const cfg = await getRuntime(env);
+        if (!cfg) {
+          // Fresh deployment (no SECRET yet): only a random secret is shown; nothing is leaked.
+          return serveSecret(null, host, "", port);
+        }
+        // Configured deployment: the page reveals working secrets, so it needs
+        // GENERATOR_ENABLED=true AND ?key=<ADMIN_KEY>. Otherwise look like the decoy site.
         const generatorEnabled = env?.GENERATOR_ENABLED !== undefined
           ? (env.GENERATOR_ENABLED === "true" || env.GENERATOR_ENABLED === "1")
           : CONFIG.generatorEnabled;
-        if (!generatorEnabled) return notFound();
-        const cfg = await getRuntime(env);
+        const adminKey = typeof env?.ADMIN_KEY === "string" ? env.ADMIN_KEY.trim() : "";
+        if (!generatorEnabled || adminKey.length < 16 || !safeEqual(url.searchParams.get("key") || "", adminKey)) {
+          return decoy(cfg.decoyUrl, request.method);
+        }
         return serveSecret(cfg, host, label || url.searchParams.get("host") || "", port);
       }
 
@@ -1787,7 +1884,7 @@ export default {
         return serveBridge(cfg, host, mode, port);
       }
       if (url.pathname === cfg.sessionPath || url.pathname === "/api/v1/session") return serveSession(request, cfg);
-      if (url.pathname === cfg.wsPath || url.pathname === "/api/v1/ws") return serveWebSocket(request, cfg, host);
+      if (url.pathname === cfg.wsPath || url.pathname === "/api/v1/ws") return serveWebSocket(request, cfg, host, port);
       return decoy(cfg.decoyUrl, request.method);
     } catch (_) {
       return decoy(env?.DECOY_URL, request.method);
