@@ -1,6 +1,23 @@
 import { connect } from "cloudflare:sockets";
 
 /*
+ * ===================== QUICK SETUP (no code editing) =====================
+ * 1. Paste this file into a Cloudflare Worker and Deploy.
+ * 2. Worker -> Settings -> Variables and Secrets -> add ONE variable:
+ *        ADMIN_KEY = a long random password (16+ letters/digits)
+ *    (Opening the worker address before this shows a setup page with a ready key.)
+ * 3. Open  https://<your-domain>/<ADMIN_KEY>  -> panel with ready Telegram links
+ *    for every Cloudflare HTTPS port (443, 2053, 2083, 2087, 2096, 8443).
+ * Optional:
+ *    EXTRA_HOSTS = other hostnames attached to this worker, comma separated.
+ *                  The panel shows links for them too.
+ * Any of the 6 ports can also be typed manually in Telegram (server + port +
+ * secret); the Worker accepts all of them without extra settings.
+ *    SECRET      = fixed 32-hex secret (otherwise derived from ADMIN_KEY).
+ * =========================================================================
+ */
+
+/*
  * ============================================================================
  * Telegram WEB Proxy for Cloudflare Workers (Single-File ES Module)
  * Architecture, Middle-End (ME) Protocol Analysis & Direct-DC Implementation
@@ -109,6 +126,8 @@ const ME_CONSTANTS = {
 };
 
 // Default Configuration fallback (overridden by dashboard environment variables)
+const HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
+
 const CONFIG = {
   secretHex: "",                // Overridden by env.SECRET (32 hex or dd+32 hex)
   adTagHex: "",                 // Overridden by env.AD_TAG (32 hex)
@@ -325,7 +344,7 @@ const BRIDGE_HTML = `<!doctype html>
 <script nonce="__NONCE__">
 (()=>{
 'use strict';
-const relayBase=__RELAY_BASE__,bootstrap=__BOOTSTRAP__,carrierMode=__CARRIER_MODE__,sessionPath=__SESSION_PATH__,wsPath=__WS_PATH__;
+const relayBase=location.origin+'/',bootstrap=__BOOTSTRAP__,carrierMode=__CARRIER_MODE__,sessionPath=__SESSION_PATH__,wsPath=__WS_PATH__;
 const fragment=location.hash,androidNonce=/^#android=([A-Za-z0-9_-]{43})$/.exec(fragment)?.[1]||'';
 history.replaceState(null,'',location.pathname);
 let initialized=false,closed=false,port=null,sessionToken='',createStarted=false;
@@ -887,11 +906,18 @@ function resolveConfig(env) {
     ? (env.WS_PATH.trim().startsWith("/") ? env.WS_PATH.trim() : "/" + env.WS_PATH.trim())
     : CONFIG.wsPath;
 
+  const adminKey = (typeof env?.ADMIN_KEY === "string" ? env.ADMIN_KEY.trim() : "");
+  const extraHosts = (typeof env?.EXTRA_HOSTS === "string" ? env.EXTRA_HOSTS : "")
+    .split(/[,\s]+/)
+    .map((value) => value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[:/].*$/, "").replace(/\.$/, ""))
+    .filter((value) => /^[a-z0-9.-]+$/.test(value) && !value.includes(".."));
   const carrierEnv = (typeof env?.CARRIER === "string" ? env.CARRIER.trim().toLowerCase() : "");
   const carrier = carrierEnv === "websocket" || carrierEnv === "websocket-lanes" ? carrierEnv : CONFIG.carrier;
 
   return {
     secretHex,
+    adminKey,
+    extraHosts,
     adTagHex,
     debug,
     hostnames,
@@ -920,7 +946,7 @@ let cachedKey = null;
 
 async function getRuntime(env) {
   const resolved = resolveConfig(env);
-  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}`;
+  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.adminKey}:${resolved.extraHosts.join(",")}`;
   if (cachedRuntime && cachedKey === cacheKey) {
     return cachedRuntime;
   }
@@ -933,7 +959,13 @@ async function getRuntime(env) {
 }
 
 async function buildRuntime(cfg) {
-  const base = parseSecret(cfg.secretHex);
+  const adminKey = cfg.adminKey && cfg.adminKey.length >= 16 ? cfg.adminKey : "";
+  let base = parseSecret(cfg.secretHex);
+  const secretDerived = !base && !!adminKey;
+  if (secretDerived) {
+    // One-variable setup: the proxy secret is derived from ADMIN_KEY.
+    base = (await sha256(concat(te.encode("proxygosha-secret-from-admin-v1\n"), te.encode(adminKey)))).slice(0, 16);
+  }
   const generatorText = String(cfg.generatorKey || "").trim();
   if (!base && !generatorText) return null;
 
@@ -961,6 +993,9 @@ async function buildRuntime(cfg) {
 
   return {
     base,
+    adminKey,
+    secretDerived,
+    extraHosts: cfg.extraHosts || [],
     bridgeKeys,
     generatorHmac: generatorRaw ? await importHmac(generatorRaw, ["sign", "verify"]) : null,
     tokenKey,
@@ -1001,7 +1036,7 @@ function hostAllowed(cfg, host) {
   if (cfg.hosts.length === 0 || cfg.hosts.includes("*") || (cfg.hosts.length === 1 && cfg.hosts[0] === "proxy.example.com")) {
     return true;
   }
-  return cfg.hosts.includes(host);
+  return cfg.hosts.includes(host) || (cfg.extraHosts || []).includes(host);
 }
 
 async function deriveSecret(cfg, label) {
@@ -1014,11 +1049,13 @@ async function bridgeMode(cfg, host, capability, port) {
   const provided = b64uDecodeStrict(capability);
   if (!provided || provided.length !== 32) return -1;
 
-  // Support both canonical hostname and host:port for alternate Cloudflare ports (8443, 2053, etc.)
+  // Accept the plain hostname and host:port for the detected port first, then for
+  // every Cloudflare HTTPS port, so a manually typed port always works.
   const candidateHosts = [host];
-  if (port && port !== "443" && port !== "80") {
-    candidateHosts.push(`${host}:${port}`);
-  }
+  const ports = [];
+  if (port && port !== "443" && port !== "80") ports.push(port);
+  for (const p of HTTPS_PORTS) if (p !== 443 && !ports.includes(String(p))) ports.push(String(p));
+  for (const p of ports) candidateHosts.push(`${host}:${p}`);
 
   for (let index = 0; index < candidateHosts.length; index++) {
     const h = candidateHosts[index];
@@ -1132,6 +1169,81 @@ async function serveSecret(cfg, host, label, port) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function panelRequested(url, cfg) {
+  if (!cfg.adminKey) return false;
+  let path = "";
+  try { path = decodeURIComponent(url.pathname.slice(1)); } catch (_) { return false; }
+  if (path.endsWith("/")) path = path.slice(0, -1);
+  if (path && safeEqual(path, cfg.adminKey)) return true;
+  return generatorLabel(url) === "" && safeEqual(url.searchParams.get("key") || "", cfg.adminKey);
+}
+
+function pageHeaders() {
+  return {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Robots-Tag": "noindex, nofollow",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  };
+}
+
+const PAGE_STYLE = "body{font-family:Tahoma,system-ui,sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#f6f7f9;color:#1d2330;line-height:1.9}h1{font-size:20px}h2{font-size:16px;margin-top:28px}.card{background:#fff;border-radius:12px;padding:12px 16px;margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}a.btn{display:block;text-align:center;background:#2a9df4;color:#fff;text-decoration:none;padding:10px;border-radius:10px;margin:6px 0;font-weight:bold}code,textarea{direction:ltr;text-align:left;font-family:monospace;font-size:12px}textarea{width:100%;height:58px;box-sizing:border-box;border:1px solid #ccd;border-radius:8px;padding:6px}.muted{color:#667;font-size:13px}.warn{background:#fff4e5;border-right:4px solid #f0a020}";
+
+function servePanel(cfg, host, port) {
+  const secret = "dd" + bytesToHex(cfg.base);
+  const hosts = [];
+  for (const h of [host, ...(cfg.extraHosts || [])]) if (h && !hosts.includes(h)) hosts.push(h);
+  const sections = hosts.map((h) => {
+    const workersDev = h.endsWith(".workers.dev");
+    const items = HTTPS_PORTS.map((p) => {
+      const link = "tg://webproxy?server=" + encodeURIComponent(h) + (p !== 443 ? "&port=" + p : "") + "&secret=" + secret;
+      return `<div class="card"><b>پورت ${p}</b>${p === 443 ? " (پیش‌فرض)" : ""}<a class="btn" href="${escapeHtml(link)}">اتصال در تلگرام</a><textarea readonly>${escapeHtml(link)}</textarea></div>`;
+    }).join("");
+    const note = workersDev
+      ? `<p class="muted">آدرس workers.dev معمولاً در ایران فیلتر است و ممکن است بعضی پورت‌ها رویش باز نباشند. بهتر است یک دامنه شخصی (Custom Domain) به ورکر وصل کنید.</p>`
+      : "";
+    const manual = `<div class="card"><b>ورود دستی در تلگرام</b>: در تنظیمات پروکسی تلگرام یک پروکسی جدید از نوع WEB اضافه کنید و این‌ها را وارد کنید:<br>
+سرور:<textarea readonly style="height:34px">${escapeHtml(h)}</textarea>
+پورت: یکی از <code>${HTTPS_PORTS.join("، ")}</code><br>
+سکرت:<textarea readonly style="height:34px">${escapeHtml(secret)}</textarea></div>`;
+    return `<h2>${escapeHtml(h)}</h2>${note}${manual}${items}`;
+  }).join("");
+  const derivedNote = cfg.secretDerived
+    ? `<div class="card warn">سکرت از ADMIN_KEY ساخته شده است. اگر ADMIN_KEY را عوض کنید، همه لینک‌های قبلی از کار می‌افتند.</div>`
+    : "";
+  const html = `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Panel</title><style>${PAGE_STYLE}</style></head><body>
+<h1>پنل پروکسی</h1>
+<div class="card">روی دکمه «اتصال در تلگرام» بزنید تا پروکسی به تلگرام اضافه شود. اگر یک پورت وصل نشد، پورت دیگری را امتحان کنید. می‌توانید چند لینک را با هم اضافه کنید.</div>
+<div class="card warn">این صفحه را با کسی به اشتراک نگذارید؛ فقط لینک‌ها را بفرستید.</div>
+${derivedNote}
+${sections}
+</body></html>`;
+  return new Response(html, { status: 200, headers: pageHeaders() });
+}
+
+function serveSetup(host, env) {
+  const suggested = b64uEncode(crypto.getRandomValues(new Uint8Array(18))).replace(/[-_]/g, "x");
+  const current = typeof env?.ADMIN_KEY === "string" ? env.ADMIN_KEY.trim() : "";
+  const problem = current && current.length < 16
+    ? `<div class="card warn">ADMIN_KEY فعلی کوتاه است (حداقل ۱۶ کاراکتر لازم است).</div>`
+    : "";
+  const html = `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Setup</title><style>${PAGE_STYLE}</style></head><body>
+<h1>راه‌اندازی پروکسی</h1>${problem}
+<div class="card">۱. در داشبورد کلودفلر: Workers &amp; Pages ← این ورکر ← Settings ← Variables and Secrets<br>
+۲. روی Add بزنید. نام: <code>ADMIN_KEY</code> ، مقدار: رمز زیر (یا هر رمز ۱۶+ حرفی از حروف و اعداد انگلیسی)<textarea readonly>${escapeHtml(suggested)}</textarea>
+۳. Deploy را بزنید.<br>
+۴. این آدرس را باز کنید تا لینک‌های تلگرام را ببینید:<textarea readonly>https://${escapeHtml(host)}/${escapeHtml(suggested)}</textarea></div>
+<p class="muted">این رمز را جایی امن نگه دارید. هر کس آن را داشته باشد به پنل دسترسی دارد.</p>
+</body></html>`;
+  return new Response(html, { status: 200, headers: pageHeaders() });
+}
+
 async function issueToken(cfg, kind, ttl, mode) {
   const nonce = new Uint8Array(16);
   new DataView(nonce.buffer).setUint32(0, Math.floor(Date.now() / 1000) + ttl, false);
@@ -1210,7 +1322,7 @@ async function serveBridge(cfg, host, mode, port) {
     "default-src 'none'",
     "base-uri 'none'",
     "child-src 'none'",
-    "connect-src 'self' wss://" + authority + " wss://" + host + " https://" + authority,
+    "connect-src 'self' https://" + host + ":* wss://" + host + ":* https://" + host + " wss://" + host,
     "font-src 'none'",
     "form-action 'none'",
     "frame-ancestors http://127.0.0.1:*",
@@ -1828,28 +1940,22 @@ export default {
       const portMatch = /:([0-9]+)$/.exec(rawHost);
       const port = portMatch ? portMatch[1] : (url.port || "");
 
-      // Check secret generator BEFORE checking cfg, so fresh deployments without env.SECRET can generate one!
+      const cfg = await getRuntime(env);
+      // Not configured yet: show a step-by-step setup page (nothing to protect yet).
+      if (!cfg) return serveSetup(host, env);
+
+      // Admin panel: https://host/<ADMIN_KEY>  (or legacy ?create-secret&key=<ADMIN_KEY>)
+      if (request.method === "GET" && panelRequested(url, cfg)) return servePanel(cfg, host, port);
+
+      // Legacy per-domain secret generator (ACCEPT_GENERATED); also gated by ADMIN_KEY.
       const label = generatorLabel(url);
       if (label !== null) {
-        const cfg = await getRuntime(env);
-        if (!cfg) {
-          // Fresh deployment (no SECRET yet): only a random secret is shown; nothing is leaked.
-          return serveSecret(null, host, "", port);
-        }
-        // Configured deployment: the page reveals working secrets, so it needs
-        // GENERATOR_ENABLED=true AND ?key=<ADMIN_KEY>. Otherwise look like the decoy site.
-        const generatorEnabled = env?.GENERATOR_ENABLED !== undefined
-          ? (env.GENERATOR_ENABLED === "true" || env.GENERATOR_ENABLED === "1")
-          : CONFIG.generatorEnabled;
-        const adminKey = typeof env?.ADMIN_KEY === "string" ? env.ADMIN_KEY.trim() : "";
-        if (!generatorEnabled || adminKey.length < 16 || !safeEqual(url.searchParams.get("key") || "", adminKey)) {
+        const generatorEnabled = env?.GENERATOR_ENABLED === "true" || env?.GENERATOR_ENABLED === "1";
+        if (!generatorEnabled || !cfg.adminKey || !label || !safeEqual(url.searchParams.get("key") || "", cfg.adminKey)) {
           return decoy(cfg.decoyUrl, request.method);
         }
-        return serveSecret(cfg, host, label || url.searchParams.get("host") || "", port);
+        return serveSecret(cfg, host, label, port);
       }
-
-      const cfg = await getRuntime(env);
-      if (!cfg) return decoy(env?.DECOY_URL, request.method);
 
       // Active Probing Defense & Authentic Web Assets (GFW / TSPU scanner camouflage)
       if (url.pathname === "/robots.txt") {
