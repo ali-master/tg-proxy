@@ -165,6 +165,7 @@ const TOKEN_DOMAIN = te.encode("tgweb-token-v1\0");
 const BUILD_SEAL = "Pt54F2/pkjqM1YnQmZRs3Xvqd54U1iZVSYCfYAOgf5wIRzjyeruT";
 const TOKEN_KIND_BOOTSTRAP = 1;
 const TOKEN_KIND_SESSION = 2;
+const PORT_MODE_BASE = 10;
 const REQUEST_LIMIT = 16777216;
 
 const PERMISSIONS_POLICY = "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), web-share=(), xr-spatial-tracking=()";
@@ -1006,6 +1007,26 @@ async function buildRuntime(cfg) {
     bridgeKeys.push(await importHmac(concat(Uint8Array.of(0xdd), base), ["verify"]));
   }
 
+  const portSecrets = {};
+  if (base) {
+    for (const p of HTTPS_PORTS) {
+      let sBytes;
+      if (p === 443) {
+        sBytes = base;
+      } else {
+        sBytes = (await sha256(concat(te.encode("proxygosha-port-secret-v1\n"), base, te.encode("\n" + p)))).slice(0, 16);
+      }
+      portSecrets[p] = {
+        secret: sBytes,
+        secretHex: "dd" + bytesToHex(sBytes),
+        keys: [
+          await importHmac(sBytes, ["verify"]),
+          await importHmac(concat(Uint8Array.of(0xdd), sBytes), ["verify"])
+        ]
+      };
+    }
+  }
+
   const tokenKey = await importHmac(
     await sha256(concat(te.encode("tgweb-token-key-v1\0"), seal.bytes, fallback)),
     ["sign", "verify"]
@@ -1019,6 +1040,7 @@ async function buildRuntime(cfg) {
 
   return {
     base,
+    portSecrets,
     adminKey,
     secretDerived,
     extraHosts: cfg.extraHosts || [],
@@ -1075,25 +1097,69 @@ async function bridgeMode(cfg, host, capability, port) {
   const provided = b64uDecodeStrict(capability);
   if (!provided || provided.length !== 32) return -1;
 
-  // Accept the plain hostname and host:port for the detected port first, then for
-  // every Cloudflare HTTPS port, so a manually typed port always works.
-  const candidateHosts = [host];
-  const ports = [];
-  if (port && port !== "443" && port !== "80") ports.push(port);
-  for (const p of HTTPS_PORTS) if (p !== 443 && !ports.includes(String(p))) ports.push(String(p));
-  for (const p of ports) candidateHosts.push(`${host}:${p}`);
+  const incomingPort = port ? parseInt(port, 10) : 443;
+  const isKnownPort = HTTPS_PORTS.includes(incomingPort);
 
-  for (let index = 0; index < candidateHosts.length; index++) {
-    const h = candidateHosts[index];
+  if (isKnownPort && cfg.portSecrets?.[incomingPort]) {
+    const pKeys = cfg.portSecrets[incomingPort].keys;
+    const contexts = incomingPort === 443
+      ? [te.encode("tdesktop-web-proxy-bridge-v1\n" + host)]
+      : [
+          te.encode(`tdesktop-web-proxy-bridge-v1\n${host}:${incomingPort}`),
+          te.encode("tdesktop-web-proxy-bridge-v1\n" + host)
+        ];
+    for (const ctx of contexts) {
+      for (const key of pKeys) {
+        if (await crypto.subtle.verify("HMAC", key, provided, ctx)) {
+          return PORT_MODE_BASE + HTTPS_PORTS.indexOf(incomingPort);
+        }
+      }
+    }
+  }
+
+  const candidateHosts = [host];
+  const candidatePorts = [];
+  if (port && port !== "443" && port !== "80") candidatePorts.push(port);
+  for (const p of HTTPS_PORTS) if (p !== 443 && !candidatePorts.includes(String(p))) candidatePorts.push(String(p));
+  for (const p of candidatePorts) candidateHosts.push(`${host}:${p}`);
+
+  for (const h of candidateHosts) {
     const context = te.encode("tdesktop-web-proxy-bridge-v1\n" + h);
     for (const key of cfg.bridgeKeys) {
-      if (await crypto.subtle.verify("HMAC", key, provided, context)) return 0;
+      if (await crypto.subtle.verify("HMAC", key, provided, context)) {
+        return PORT_MODE_BASE;
+      }
     }
-    if (cfg.acceptGenerated) {
+  }
+
+  if (cfg.portSecrets) {
+    for (let idx = 0; idx < HTTPS_PORTS.length; idx++) {
+      const p = HTTPS_PORTS[idx];
+      if (p === incomingPort) continue;
+      const pKeys = cfg.portSecrets[p].keys;
+      const contexts = [
+        te.encode(`tdesktop-web-proxy-bridge-v1\n${host}:${p}`),
+        te.encode("tdesktop-web-proxy-bridge-v1\n" + host)
+      ];
+      for (const ctx of contexts) {
+        for (const key of pKeys) {
+          if (await crypto.subtle.verify("HMAC", key, provided, ctx)) {
+            if (!port || port === "443" || port === String(p)) {
+              return PORT_MODE_BASE + idx;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (cfg.acceptGenerated) {
+    for (let index = 0; index < candidateHosts.length; index++) {
+      const h = candidateHosts[index];
+      const context = te.encode("tdesktop-web-proxy-bridge-v1\n" + h);
       const secret = await deriveSecret(cfg, h);
       if (secret) {
         const key = await importHmac(secret, ["verify"]);
-        // mode 1 = secret derived from host, mode 2 = derived from host:port
         if (await crypto.subtle.verify("HMAC", key, provided, context)) return index === 0 ? 1 : 2;
       }
     }
@@ -1246,7 +1312,8 @@ async function servePanel(cfg, host, port, lang) {
   const sections = hosts.map((h) => {
     const workersDev = h.endsWith(".workers.dev");
     const items = HTTPS_PORTS.map((p) => {
-      const link = "tg://webproxy?server=" + encodeURIComponent(h) + (p !== 443 ? "&port=" + p : "") + "&secret=" + secret;
+      const pSecret = cfg.portSecrets?.[p]?.secretHex || secret;
+      const link = "tg://webproxy?server=" + encodeURIComponent(h) + (p !== 443 ? "&port=" + p : "") + "&secret=" + pSecret;
       return `<div class="card"><b>${bi("Port", "پورت")} ${p}</b>${p === 443 ? " " + bi("(default)", "(پیش‌فرض)") : ""}<a class="btn" href="${escapeHtml(link)}">${bi("Connect in Telegram", "اتصال در تلگرام")}</a><textarea readonly>${escapeHtml(link)}</textarea></div>`;
     }).join("");
     const note = workersDev
@@ -1255,29 +1322,33 @@ async function servePanel(cfg, host, port, lang) {
           "آدرس workers.dev معمولاً در ایران فیلتر است و ممکن است بعضی پورت‌ها رویش باز نباشند. بهتر است یک دامنه شخصی (Custom Domain) به ورکر وصل کنید."
         )}</p>`
       : "";
+    const manualItems = HTTPS_PORTS.map((p) => {
+      const s = cfg.portSecrets?.[p]?.secretHex || secret;
+      return `<div style="margin:6px 0"><b>${bi("Port", "پورت")} ${p}</b>${p === 443 ? " " + bi("(default)", "(پیش‌فرض)") : ""}:<textarea class="one" readonly>${escapeHtml(s)}</textarea></div>`;
+    }).join("");
     const manual = `<div class="card"><b>${bi("Manual entry", "ورود دستی")}</b> — ${bi(
-        "in Telegram's proxy settings, add a new proxy of type <b>WEB</b> and enter:",
-        "در تنظیمات پروکسی تلگرام یک پروکسی جدید از نوع <b>WEB</b> اضافه کنید و این‌ها را وارد کنید:"
+        "in Telegram's proxy settings, add a new proxy of type <b>WEB</b>. Each port has its own unique secret:",
+        "در تنظیمات پروکسی تلگرام یک پروکسی جدید از نوع <b>WEB</b> اضافه کنید. هر پورت سکرت اختصاصی خود را دارد:"
       )}<br>
 ${bi("Server", "سرور")}:<textarea class="one" readonly>${escapeHtml(h)}</textarea>
-${bi("Port: any one of", "پورت: یکی از")} <code>${HTTPS_PORTS.join(" · ")}</code><br>
-${bi("Secret", "سکرت")}:<textarea class="one" readonly>${escapeHtml(secret)}</textarea></div>`;
+<div style="margin-top:8px"><b>${bi("Ports &amp; Secrets", "پورت‌ها و سکرت‌ها")}:</b></div>
+${manualItems}</div>`;
     return `<h2>${escapeHtml(h)}</h2>${note}${manual}${items}`;
   }).join("");
   const derivedNote = cfg.secretDerived
     ? `<div class="card warn">${bi(
-        "Your proxy secret is derived from ADMIN_KEY. Changing ADMIN_KEY changes the secret and breaks every link you have shared. To avoid this, also set a fixed SECRET variable.",
-        "سکرت پروکسی از ADMIN_KEY ساخته شده است. اگر ADMIN_KEY را عوض کنید، سکرت هم عوض می‌شود و همه لینک‌هایی که فرستاده‌اید از کار می‌افتند. برای جلوگیری، یک متغیر SECRET ثابت هم تنظیم کنید."
+        "Your proxy secrets are derived from ADMIN_KEY. Changing ADMIN_KEY changes the secrets and breaks every link you have shared. To avoid this, also set a fixed SECRET variable.",
+        "سکرت‌های پروکسی از ADMIN_KEY ساخته شده‌اند. اگر ADMIN_KEY را عوض کنید، سکرت‌ها هم عوض می‌شوند و همه لینک‌هایی که فرستاده‌اید از کار می‌افتند. برای جلوگیری، یک متغیر SECRET ثابت هم تنظیم کنید."
       )}</div>`
     : "";
   const body = `<h1>${bi("Proxy panel", "پنل پروکسی")}</h1>
 <div class="card">${bi(
-    "Tap <b>Connect in Telegram</b> to add the proxy. If a port does not connect, try another one. You can add several ports at once and switch between them in Telegram.",
-    "روی «اتصال در تلگرام» بزنید تا پروکسی اضافه شود. اگر یک پورت وصل نشد، پورت دیگری را امتحان کنید. می‌توانید چند پورت را با هم اضافه کنید و در تلگرام بینشان جابه‌جا شوید."
+    "Tap <b>Connect in Telegram</b> to add the proxy. Each port has its own secret. If a port does not connect, try another one. You can add several ports at once and switch between them in Telegram.",
+    "روی «اتصال در تلگرام» بزنید تا پروکسی اضافه شود. هر پورت سکرت اختصاصی خود را دارد. اگر یک پورت وصل نشد، پورت دیگری را امتحان کنید. می‌توانید چند پورت را با هم اضافه کنید و در تلگرام بینشان جابه‌جا شوید."
   )}</div>
 <div class="card warn">${bi(
-    "Do not share this page. Share only the links, or the server, port and secret.",
-    "این صفحه را با کسی به اشتراک نگذارید. فقط لینک‌ها یا سرور، پورت و سکرت را بفرستید."
+    "Do not share this page. Share only the links, or the server, port and matching secret.",
+    "این صفحه را با کسی به اشتراک نگذارید. فقط لینک‌ها یا سرور، پورت و سکرت مربوطه را بفرستید."
   )}</div>
 ${derivedNote}
 ${sections}`;
@@ -1315,7 +1386,7 @@ ${bi("Panel address", "آدرس پنل")}:<textarea class="one" readonly>https:/
 async function issueToken(cfg, kind, ttl, mode) {
   const nonce = new Uint8Array(16);
   new DataView(nonce.buffer).setUint32(0, Math.floor(Date.now() / 1000) + ttl, false);
-  nonce[4] = mode === 1 || mode === 2 ? mode : 0;
+  nonce[4] = typeof mode === "number" && mode >= 0 && mode <= 255 ? mode : 0;
   crypto.getRandomValues(nonce.subarray(5));
   const mac = new Uint8Array(await crypto.subtle.sign("HMAC", cfg.tokenKey, concat(TOKEN_DOMAIN, Uint8Array.of(kind), nonce)));
   return b64uEncode(concat(nonce, mac));
@@ -1330,7 +1401,7 @@ async function verifyToken(cfg, token, kind) {
   if (!ok) return null;
   const expires = new DataView(nonce.buffer, nonce.byteOffset, 4).getUint32(0, false);
   if (expires < Math.floor(Date.now() / 1000)) return null;
-  return { nonce, mode: nonce[4] === 1 || nonce[4] === 2 ? nonce[4] : 0 };
+  return { nonce, mode: nonce[4] };
 }
 
 async function decoy(decoyUrl, requestMethod = "GET") {
@@ -1936,7 +2007,7 @@ async function serveSession(request, cfg) {
   if ((request.headers.get("content-type") || "").toLowerCase() !== "application/octet-stream") return notFound();
   const verified = await verifyToken(cfg, token, TOKEN_KIND_BOOTSTRAP);
   if (!verified) return notFound();
-  if (verified.mode !== 0 && !cfg.acceptGenerated) return notFound();
+  if ((verified.mode === 1 || verified.mode === 2) && !cfg.acceptGenerated) return notFound();
   const body = new Uint8Array(await request.arrayBuffer());
   if (body.length !== 9) return notFound();
   if (body[0] !== 0x10 || body[1] !== 0 || body[2] !== 0 || body[3] !== 0) return notFound();
@@ -1977,9 +2048,15 @@ async function serveWebSocket(request, cfg, host, port) {
   }
   const verified = await verifyToken(cfg, token, TOKEN_KIND_SESSION);
   if (!verified) return notFound();
-  if (verified.mode !== 0 && !cfg.acceptGenerated) return notFound();
-  const label = verified.mode === 2 && port && port !== "443" && port !== "80" ? `${host}:${port}` : host;
-  const secret = verified.mode !== 0 ? await deriveSecret(cfg, label) : cfg.base;
+  if ((verified.mode === 1 || verified.mode === 2) && !cfg.acceptGenerated) return notFound();
+  let secret = cfg.base;
+  if (verified.mode >= PORT_MODE_BASE && verified.mode < PORT_MODE_BASE + HTTPS_PORTS.length) {
+    const portNum = HTTPS_PORTS[verified.mode - PORT_MODE_BASE];
+    secret = cfg.portSecrets?.[portNum]?.secret || cfg.base;
+  } else if (verified.mode === 1 || verified.mode === 2) {
+    const label = verified.mode === 2 && port && port !== "443" && port !== "80" ? `${host}:${port}` : host;
+    secret = await deriveSecret(cfg, label);
+  }
   if (!secret) return notFound();
   const pair = new WebSocketPair();
   const client = pair[0];

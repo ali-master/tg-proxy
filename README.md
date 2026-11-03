@@ -85,20 +85,20 @@ https://tg.yourdomain.com/YOUR_ADMIN_KEY
 The panel shows two ways to connect:
 
 - **One tap:** a **Connect in Telegram** button for each of the six ports. On a phone or desktop with Telegram installed, tapping it adds the proxy straight away.
-- **Manual entry:** the **server**, the **ports** and the **secret**, to type into Telegram yourself:
+- **Manual entry:** the **server**, and the corresponding **port** and **secret** pair shown in the panel table:
 
 | Field | Value |
 |---|---|
 | Server | `tg.yourdomain.com` |
 | Port | any one of `443` · `2053` · `2083` · `2087` · `2096` · `8443` |
-| Secret | the value shown in the panel |
+| Secret | the specific secret shown for that port in the panel table |
 
 Where to enter them in Telegram:
 
 - **Desktop:** Settings → Advanced → Connection type → Use custom proxy → Add proxy → **WEB**
 - **Mobile:** Settings → Data and Storage → Proxy → Add Proxy → **WEB** (once your app version offers it)
 
-**Done.** To share the proxy, send people **the links or the three values**. Never send the panel address.
+**Done.** To share the proxy, send people **the links or the connection values (server, port, and that port's secret)**. Never send the panel address.
 
 ---
 
@@ -108,7 +108,7 @@ All six Cloudflare HTTPS ports work without any extra setting:
 
 `443` · `2053` · `2083` · `2087` · `2096` · `8443`
 
-If one port is slow or blocked, change only the port and keep the server and secret the same. You can add the same proxy several times with different ports and switch between them in Telegram.
+Each port has its own unique secret (derived deterministically from your setup) to keep connections isolated. If one port is slow or blocked, switch to another port and use its matching secret from the panel. You can add the proxy multiple times with different ports and switch between them in Telegram anytime.
 
 ---
 
@@ -118,14 +118,14 @@ Only `ADMIN_KEY` is required. Everything else is optional.
 
 | Variable | Purpose |
 |---|---|
-| `ADMIN_KEY` | **Required.** Password for your panel. Your proxy secret is derived from it. |
-| `SECRET` | A fixed 32-character hex secret. Set this if you want to change `ADMIN_KEY` later without breaking links you already shared. |
+| `ADMIN_KEY` | **Required.** Password for your panel. Your proxy secrets are derived from it. |
+| `SECRET` | A fixed 32-character hex secret for port 443 (and the base for other ports). Set this if you want to change `ADMIN_KEY` later without breaking links you already shared. |
 | `EXTRA_HOSTS` | Other domains attached to this Worker, separated by commas. The panel generates links for them too. |
 | `DECOY_URL` | A real website to show visitors instead of the built-in store page. Using one makes your proxy harder to tell apart from other deployments. |
 | `CARRIER` | Leave it empty. Set it to `websocket` only if the default mode gives you trouble. |
 
 > [!WARNING]
-> If `SECRET` is not set, changing `ADMIN_KEY` also changes the secret, and **every link you have shared stops working.**
+> If `SECRET` is not set, changing `ADMIN_KEY` also changes the secrets, and **every link you have shared stops working.**
 
 ---
 
