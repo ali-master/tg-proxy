@@ -1,13 +1,12 @@
-# ⚡ Free Telegram WEB Proxy on Cloudflare Workers
+# ProxyGosha — Telegram WEB Proxy on Cloudflare Workers
 
-> **Your personal, 100% free Telegram proxy (Desktop, Android & iOS) — zero servers, zero maintenance, 2-minute setup.**
+> A private Telegram proxy that runs on Cloudflare's free tier. One file, one setting, no server to rent or maintain.
 
 <p align="center">
   <a href="https://github.com/amirmarandidev/ProxyGosha/stargazers"><img src="https://img.shields.io/github/stars/amirmarandidev/ProxyGosha?style=for-the-badge&color=gold" alt="GitHub Stars"></a>
   <a href="https://workers.cloudflare.com/"><img src="https://img.shields.io/badge/Cloudflare-Workers-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="Cloudflare Workers"></a>
   <a href="https://desktop.telegram.org/"><img src="https://img.shields.io/badge/Telegram-WEB%20Proxy-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram WEB Proxy"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="License MIT"></a>
-  <img src="https://img.shields.io/badge/Cost-%240%20%2F%20Free-brightgreen?style=for-the-badge" alt="Cost Free">
 </p>
 
 <p align="center">
@@ -20,135 +19,183 @@
 
 ---
 
-### 🌟 What is this? (ELI5)
+## What this is
 
-Telegram has introduced a modern, resilient proxy protocol called **WEB Proxy** that works across all Telegram clients (Desktop, Android, and iOS whenever the WEB proxy option is enabled in their app update). Instead of renting an expensive server or configuring complex software, this project turns a **free Cloudflare Worker** into your private Telegram proxy.
+Telegram added a new proxy type called **WEB**. Unlike the classic MTProto proxy, it travels as ordinary HTTPS traffic, so it can run behind Cloudflare.
 
-* 🌐 **Looks like a normal website:** If someone or a censorship bot opens your domain in a web browser, they just see a harmless "Welcome" page.
-* 🚀 **Unblocks Telegram:** When Telegram connects to it, it securely tunnels your chats through Cloudflare’s fast global network.
-* 💰 **Cost: \$0 / Month:** Runs completely on Cloudflare's generous free tier. No credit card, no VPS, no Linux terminal needed.
+ProxyGosha turns a free Cloudflare Worker into that kind of proxy.
 
----
+**In plain terms:** Cloudflare is a huge network that a large part of the web runs through, so blocking it outright is costly for a censor. Your Worker is a small program running inside that network. Telegram talks to your Worker, and your Worker passes the traffic on to Telegram's servers.
 
-### ✨ Features
-
-* 🆓 **100% Free Forever:** No VPS bills, no recurring subscriptions.
-* 📁 **Single File (`worker.js`):** Just copy and paste into Cloudflare's dashboard editor.
-* 🛡️ **Built-in Decoy Page:** Normal browser traffic sees a clean, decoy landing page.
-* ⚡ **High Speed:** Powered by Cloudflare’s Anycast network worldwide.
-* 🔒 **Encrypted & Private:** Encrypted end-to-end; your messages remain completely private.
+- **It looks like a website.** Anyone who opens your address in a browser sees an ordinary online store.
+- **It cannot read your messages.** Telegram encrypts traffic between your app and its servers. The proxy only carries those encrypted bytes.
+- **It costs nothing to run.** The Worker runs on Cloudflare's free plan. The only optional cost is a domain name, which usually costs a few dollars a year.
 
 ---
 
-### 🚀 3-Minute Quick Setup
+## Before you start
 
-Follow these simple steps to get your proxy running:
+You need:
 
-#### Step 1: Create a Free Cloudflare Worker
-1. Log in to your [Cloudflare Dashboard](https://dash.cloudflare.com/) (create a free account if you don't have one).
-2. Go to **Compute (Workers & Pages)** > **Create application** > **Create Worker**.
-3. Choose any name (e.g., `my-tg-proxy`) and click **Deploy**.
+1. **A Cloudflare account.** It's free. Sign up at [dash.cloudflare.com](https://dash.cloudflare.com/).
+2. **A domain name (strongly recommended).** The default `workers.dev` address is filtered in some countries, including Iran, and may not open on every port. Any cheap domain added to Cloudflare will do.
+3. **A Telegram app that offers the WEB proxy type.** Telegram Desktop already has it. Mobile apps get it through app updates.
 
-#### Step 2: Paste the Code
-1. Click **Edit code** on your new Worker page.
-2. Select everything in the editor, delete it, and paste the code from [worker.js](worker.js).
-3. Click **Deploy** in the top right.
+---
 
-#### Step 3: Generate Your Secret Key
-Open your browser or terminal and visit your worker URL with `?create-secret` at the end:
-```text
-https://my-tg-proxy.<your-subdomain>.workers.dev/?create-secret
-```
-It will display your unique 32-character secret (e.g., `e89a409cf5fc08ae7b3b2ad4fd2adf6f`). Copy it!
+## Setup — five steps
 
-#### Step 4: Add the Secret to Settings
-1. Go back to your Worker dashboard, click **Settings** > **Variables and Secrets**.
-2. Under **Environment Variables**, click **Add**:
-   * **Variable name:** `SECRET`
-   * **Value:** `<paste the 32-character secret from Step 3>`
+### Step 1 — Create the Worker
+
+1. Open the [Cloudflare Dashboard](https://dash.cloudflare.com/).
+2. Go to **Workers & Pages** → **Create application** → **Create Worker**.
+3. Give it any name (for example `my-tg-proxy`) and click **Deploy**.
+
+### Step 2 — Paste the code
+
+1. On the Worker's page, click **Edit code**.
+2. Delete everything in the editor and paste the full contents of [`worker.js`](worker.js).
 3. Click **Deploy**.
 
-#### Step 5: Connect Your Domain
-1. In the Worker settings, click **Settings** > **Domains & Routes** > **Add** > **Custom Domain**.
-2. Enter your domain or subdomain (e.g., `tg.yourdomain.com`).
-3. Cloudflare will automatically set up free SSL and route port 443 to your proxy.
+### Step 3 — Set your admin key (the only required setting)
 
-#### Step 6: Connect Telegram (Desktop, Android & iOS)
-In any Telegram client that supports the WEB proxy option (e.g., Telegram Desktop):
-1. Go to **Settings** > **Advanced** > **Connection type** > **Use custom proxy** > **Add proxy**.
-2. Select **WEB** proxy.
-3. Fill in:
-   * **Host:** `tg.yourdomain.com`
-   * **Port:** `443`
-   * **Secret:** `<your 32-character secret>`
-4. Click **Save** and turn it on. Done! 🎉
+1. Open your Worker's address in a browser. You will see a **setup page** that suggests a random key. Copy it.
+2. In the dashboard, open your Worker → **Settings** → **Variables and Secrets** → **Add**:
+   - **Name:** `ADMIN_KEY`
+   - **Value:** the key you copied (or any password of at least 16 English letters and digits)
+3. Click **Deploy**.
 
-> [!TIP]
-> **One-Click Share Link:**  
-> You can also connect or share with one click using this link format:  
-> `tg://webproxy?server=tg.yourdomain.com&secret=YOUR_SECRET`
+> [!IMPORTANT]
+> Treat `ADMIN_KEY` like a password. Anyone who has it can open your panel and see your proxy secret.
 
----
+### Step 4 — Connect your domain
 
-### 🛡️ Censorship Resilience Guide (Iran, Russia & China)
+1. Add your domain to Cloudflare. Cloudflare will show you two nameservers. Set those nameservers at the company you bought the domain from.
+2. In your Worker, go to **Settings** → **Domains & Routes** → **Add** → **Custom Domain**.
+3. Enter a subdomain, for example `tg.yourdomain.com`. Cloudflare sets up the certificate and DNS automatically.
 
-If you experience connection drops, packet loss, or ISP throttling during heavy censorship periods:
+### Step 5 — Open your panel and connect
 
-1. **Alternate Cloudflare HTTPS Ports (if port 443 is throttled):**  
-   Cloudflare supports these additional secure HTTPS/WSS ports:  
-   `8443` • `2053` • `2083` • `2087` • `2096`  
-   In Telegram Desktop, you can change the port to `8443` or `2053`, or use this link format:  
-   `tg://webproxy?server=tg.yourdomain.com&port=8443&secret=YOUR_SECRET`
+Go to:
 
-2. **Clean IP (Bypassing Cloudflare IP blocks in Iran):**  
-   If your ISP blocks Cloudflare's default Anycast IP ranges, map your proxy domain to a Clean Cloudflare IP in your local `hosts` file:
-   * **Windows:** `C:\Windows\System32\drivers\etc\hosts`
-   * **macOS / Linux:** `/etc/hosts`
-   * Append a single line:  
-     `162.159.36.1   tg.yourdomain.com`  
-     *(Your system will connect directly to the Clean IP while preserving the SNI and domain certificate without any configuration mismatch).*
+```text
+https://tg.yourdomain.com/YOUR_ADMIN_KEY
+```
 
-3. **Disable ECH in Cloudflare Dashboard (Mandatory for Russia & Recommended for Iran):**  
-   Russia's RKN actively blocks TLS connections utilizing Cloudflare's Encrypted Client Hello (ECH).  
-   In your Cloudflare dashboard, go to your domain:  
-   **SSL/TLS** > **Edge Certificates** > **Encrypted Client Hello (ECH)** = **Disabled**
+The panel shows two ways to connect:
+
+- **One tap:** a **Connect in Telegram** button for each of the six ports. On a phone or desktop with Telegram installed, tapping it adds the proxy straight away.
+- **Manual entry:** the **server**, the **ports** and the **secret**, to type into Telegram yourself:
+
+| Field | Value |
+|---|---|
+| Server | `tg.yourdomain.com` |
+| Port | any one of `443` · `2053` · `2083` · `2087` · `2096` · `8443` |
+| Secret | the value shown in the panel |
+
+Where to enter them in Telegram:
+
+- **Desktop:** Settings → Advanced → Connection type → Use custom proxy → Add proxy → **WEB**
+- **Mobile:** Settings → Data and Storage → Proxy → Add Proxy → **WEB** (once your app version offers it)
+
+**Done.** To share the proxy, send people **the links or the three values**. Never send the panel address.
 
 ---
 
-### ❓ Frequently Asked Questions (FAQ)
+## Ports
+
+All six Cloudflare HTTPS ports work without any extra setting:
+
+`443` · `2053` · `2083` · `2087` · `2096` · `8443`
+
+If one port is slow or blocked, change only the port and keep the server and secret the same. You can add the same proxy several times with different ports and switch between them in Telegram.
+
+---
+
+## Settings reference
+
+Only `ADMIN_KEY` is required. Everything else is optional.
+
+| Variable | Purpose |
+|---|---|
+| `ADMIN_KEY` | **Required.** Password for your panel. Your proxy secret is derived from it. |
+| `SECRET` | A fixed 32-character hex secret. Set this if you want to change `ADMIN_KEY` later without breaking links you already shared. |
+| `EXTRA_HOSTS` | Other domains attached to this Worker, separated by commas. The panel generates links for them too. |
+| `DECOY_URL` | A real website to show visitors instead of the built-in store page. Using one makes your proxy harder to tell apart from other deployments. |
+| `CARRIER` | Leave it empty. Set it to `websocket` only if the default mode gives you trouble. |
+
+> [!WARNING]
+> If `SECRET` is not set, changing `ADMIN_KEY` also changes the secret, and **every link you have shared stops working.**
+
+---
+
+## Under heavy censorship
+
+Try these in order:
+
+1. **Switch ports.** Use another port from the list above.
+2. **Use a different domain.** If one domain is blocked, attach another one to the same Worker and add it to `EXTRA_HOSTS`.
+3. **Use a clean Cloudflare IP (desktop only).** If the IPs your domain normally resolves to are blocked, point your domain at a Cloudflare IP that still works on your network. Add one line to your `hosts` file:
+   - Windows: `C:\Windows\System32\drivers\etc\hosts`
+   - macOS / Linux: `/etc/hosts`
+
+   ```text
+   CLEAN_IP   tg.yourdomain.com
+   ```
+
+   Replace `CLEAN_IP` with a Cloudflare IP that works on your network. Clean IPs vary by ISP and stop working over time, so test them yourself.
+4. **Turn off ECH where it is blocked (for example Russia).** In Cloudflare, open your domain → **SSL/TLS** → **Edge Certificates** → **Encrypted Client Hello (ECH)** → **Off**.
+
+> [!NOTE]
+> No proxy works during a **complete** shutdown of international internet access. Cloudflare's servers are outside the country, so once the border is closed, nothing on Cloudflare can be reached. These measures help while access is filtered or partially restricted, not after it is fully cut.
+
+---
+
+## Troubleshooting
+
+| What you see | What to do |
+|---|---|
+| The address shows an online store | Normal. The proxy works behind it. To open the panel, add `/YOUR_ADMIN_KEY` to the address. |
+| The panel address shows the store | The key in the address doesn't match `ADMIN_KEY`, or you didn't click **Deploy** after setting it. |
+| The setup page appears again | `ADMIN_KEY` is missing or shorter than 16 characters. |
+| Telegram shows "connecting" forever | Try another port. Then try another domain. On `workers.dev`, connect a custom domain instead. |
+| Links you shared stopped working | `ADMIN_KEY` was changed while `SECRET` was not set. Send out the new links from the panel. |
+
+---
+
+## FAQ
 
 <details>
-<summary><b>Does it work across all Telegram clients (Desktop, Android, and iOS)?</b></summary>
-<b>Yes!</b> This proxy works on <b>all Telegram clients (Desktop, Android, and iOS)</b> provided that the <b>WEB</b> proxy type is enabled in their Telegram app update. Telegram Desktop already natively supports WEB proxy out of the box, and mobile clients (Android & iOS) connect seamlessly as soon as the WEB proxy feature is enabled in their installed update.
+<summary><b>Which Telegram apps work?</b></summary>
+Any Telegram app that offers the <b>WEB</b> proxy type. Telegram Desktop already does. Android and iOS apps support it once the option arrives in their updates.
 </details>
 
 <details>
-<summary><b>Can I share this with family and friends?</b></summary>
-Yes! Just give them your <code>tg://webproxy?...</code> link. It works great for personal use and a small group of friends.
+<summary><b>How many people can use one proxy?</b></summary>
+It is built for you and a small circle. Cloudflare's free plan allows 100,000 requests per day per account. For more people, it is better for each group to deploy its own Worker. That spreads the load, and a single leaked link doesn't take everyone down.
 </details>
 
 <details>
-<summary><b>Can I add a Sponsored Channel (Ad Tag)?</b></summary>
-No. Telegram's sponsored channel system requires a server with a dedicated, fixed outgoing port. Because Cloudflare runs on a massive shared network that dynamically scrambles outgoing ports, sponsored channels cannot work on pure Cloudflare Workers. Your proxy will connect directly to Telegram smoothly without ads.
+<summary><b>Can Cloudflare or the proxy read my messages?</b></summary>
+No. Telegram encrypts traffic between your app and its servers. The proxy only forwards those encrypted bytes and cannot decrypt them.
 </details>
 
 <details>
-<summary><b>Is it safe? Can Cloudflare read my messages?</b></summary>
-No. Telegram's messages are end-to-end encrypted (MTProto). The proxy only tunnels the encrypted packets to Telegram's data centers; it cannot decrypt or read your chats.
+<summary><b>Can I add a sponsored channel (ad tag)?</b></summary>
+No. Sponsored channels require a server with a fixed outgoing port. Cloudflare's network changes outgoing ports, so this is not possible on Workers. The proxy connects straight to Telegram's servers, with no ads.
 </details>
 
 ---
 
-### ⚠️ Disclaimer
+## Disclaimer
 
-This project is created strictly for educational purposes, protocol study, and personal experimental use. Please note that using Cloudflare Workers for general proxy or VPN services may be subject to Cloudflare's Terms of Service (Section 2.2.1(j)). Please use responsibly.
-
----
-
-### 💖 Support the Project
-This utility is free and open source. If it saves you time and simplifies your routing infrastructure, support ongoing development by giving a ⭐ on GitHub or contributing via crypto:
-
-* 🔹 **USDT (BEP20):** `0xd593ae9D32bEA690EC62460C54BF3951aFFF7803`
-* 🔸 **USDT (TRC20):** `THaaHzoTwXfUfcrtYTDXRsMmk9qhnXa56M`
+This project is provided for educational purposes and personal use. Running proxy services on Cloudflare Workers may conflict with Cloudflare's Terms of Service (Section 2.2.1(j)). You are responsible for how you use it.
 
 ---
+
+## Support
+
+ProxyGosha is free and open source. To support its development, star the repository or donate:
+
+- **USDT (BEP20):** `0xd593ae9D32bEA690EC62460C54BF3951aFFF7803`
+- **USDT (TRC20):** `THaaHzoTwXfUfcrtYTDXRsMmk9qhnXa56M`
