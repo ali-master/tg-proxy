@@ -8,6 +8,8 @@ import { connect } from "cloudflare:sockets";
  *    (Opening the worker address before this shows a setup page with a ready key.)
  * 3. Open  https://<your-domain>/<ADMIN_KEY>  -> panel with ready Telegram links
  *    for every Cloudflare HTTPS port (443, 2053, 2083, 2087, 2096, 8443).
+ *    Open  https://<your-domain>/<ADMIN_KEY>/status  -> live status, recent events
+ *    and an on-demand Telegram DC reachability probe (add ?probe=1).
  * Optional:
  *    EXTRA_HOSTS = other hostnames attached to this worker, comma separated.
  *                  The panel shows links for them too.
@@ -128,6 +130,9 @@ const ME_CONSTANTS = {
 // Default Configuration fallback (overridden by dashboard environment variables)
 const HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
 
+// Release version of this worker build (shown on the admin status page).
+const VERSION = "1.1.0";
+
 const CONFIG = {
   secretHex: "",                // Overridden by env.SECRET (32 hex or dd+32 hex)
   adTagHex: "",                 // Overridden by env.AD_TAG (32 hex)
@@ -167,6 +172,33 @@ const TOKEN_KIND_BOOTSTRAP = 1;
 const TOKEN_KIND_SESSION = 2;
 const PORT_MODE_BASE = 10;
 const REQUEST_LIMIT = 16777216;
+
+// ---- Lightweight in-memory telemetry (per isolate, best effort) ----
+// No external calls, no dependencies, bounded memory. It powers the admin
+// status page so the operator can answer "is the proxy actually working?".
+// Counters reset whenever Cloudflare recycles the isolate. No client IPs,
+// tokens or secrets are ever recorded.
+const ISOLATE_START = Date.now();
+const STATS = {
+  sessions: 0,        // WebSocket proxy sessions created in this isolate
+  sessionsActive: 0,  // currently open in this isolate
+  streams: 0,         // MTProto streams opened in this isolate
+  dcAttempts: 0,      // outbound TCP connects to Telegram DCs
+  dcFails: 0,         // failed DC connects
+  bytesUp: 0,         // client -> Telegram bytes (approximate)
+  bytesDown: 0,       // Telegram -> client bytes (approximate)
+  wsRejects: 0,       // WebSocket handshakes rejected (bad/expired token)
+  panelViews: 0,
+  statusViews: 0
+};
+const LOG = [];
+const LOG_LIMIT = 120;
+function logEvent(event, detail) {
+  try {
+    LOG.push({ t: Date.now(), event: String(event).slice(0, 24), detail: String(detail || "").slice(0, 120) });
+    if (LOG.length > LOG_LIMIT) LOG.splice(0, LOG.length - LOG_LIMIT);
+  } catch (_) {}
+}
 
 const PERMISSIONS_POLICY = "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), web-share=(), xr-spatial-tracking=()";
 
@@ -972,7 +1004,7 @@ let cachedKey = null;
 
 async function getRuntime(env) {
   const resolved = resolveConfig(env);
-  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.adminKey}:${resolved.extraHosts.join(",")}`;
+  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.generatorEnabled}:${resolved.adminKey}:${resolved.extraHosts.join(",")}`;
   if (cachedRuntime && cachedKey === cacheKey) {
     return cachedRuntime;
   }
@@ -1256,7 +1288,9 @@ async function serveSecret(cfg, host, label, port) {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "no-store",
-      "X-Robots-Tag": "noindex"
+      "X-Robots-Tag": "noindex",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff"
     }
   });
 }
@@ -1265,13 +1299,19 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function panelRequested(url, cfg) {
-  if (!cfg.adminKey) return false;
+// Resolves which admin surface (if any) a request targets:
+//   "panel"  -> the link panel at /<ADMIN_KEY> (or legacy ?create-secret&key=<ADMIN_KEY>)
+//   "status" -> the status & logs page at /<ADMIN_KEY>/status
+// Anything else returns null and the request falls through to the decoy site.
+function panelRoute(url, cfg) {
+  if (!cfg.adminKey) return null;
   let path = "";
-  try { path = decodeURIComponent(url.pathname.slice(1)); } catch (_) { return false; }
+  try { path = decodeURIComponent(url.pathname.slice(1)); } catch (_) { return null; }
   if (path.endsWith("/")) path = path.slice(0, -1);
-  if (path && safeEqual(path, cfg.adminKey)) return true;
-  return generatorLabel(url) === "" && safeEqual(url.searchParams.get("key") || "", cfg.adminKey);
+  if (path && safeEqual(path, cfg.adminKey)) return "panel";
+  if (path && safeEqual(path, cfg.adminKey + "/status")) return "status";
+  if (generatorLabel(url) === "" && safeEqual(url.searchParams.get("key") || "", cfg.adminKey)) return "panel";
+  return null;
 }
 
 function pageHeaders() {
@@ -1281,12 +1321,15 @@ function pageHeaders() {
     "X-Robots-Tag": "noindex, nofollow",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
+    "Strict-Transport-Security": "max-age=31536000",
+    "X-Frame-Options": "DENY",
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
   };
 }
 
 const PAGE_STYLE = "body{font-family:system-ui,-apple-system,'Segoe UI',Tahoma,sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#f6f7f9;color:#1d2330;line-height:1.8}h1{font-size:21px;margin:8px 0 4px}h2{font-size:16px;margin-top:28px}.card{background:#fff;border-radius:12px;padding:12px 16px;margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}a.btn{display:block;text-align:center;background:#2a9df4;color:#fff;text-decoration:none;padding:10px;border-radius:10px;margin:6px 0;font-weight:bold}code,textarea{direction:ltr;text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:12px}textarea{width:100%;height:58px;box-sizing:border-box;border:1px solid #ccd;border-radius:8px;padding:6px}textarea.one{height:34px}.muted{color:#667;font-size:13px}.warn{background:#fff4e5;border-inline-start:4px solid #f0a020}footer.credit{margin:32px 0 8px;text-align:center;font-size:12px;color:#889;direction:ltr}footer.credit a{color:#667}ol{padding-inline-start:22px;margin:4px 0}nav.lang{text-align:end;font-size:14px}nav.lang label{cursor:pointer;padding:4px 10px;border-radius:8px;color:#2a6fd6}"
-  + ".fa{display:none}#l-fa:checked~main{direction:rtl;font-family:Tahoma,system-ui,sans-serif}#l-fa:checked~main .en{display:none}#l-fa:checked~main span.fa{display:inline}#l-fa:checked~main div.fa,#l-fa:checked~main p.fa,#l-fa:checked~main ol.fa,#l-fa:checked~main h1.fa,#l-fa:checked~main h2.fa{display:block}#l-en:checked~main nav label[for=l-en],#l-fa:checked~main nav label[for=l-fa]{background:#e3eefc;font-weight:bold}";
+  + ".fa{display:none}#l-fa:checked~main{direction:rtl;font-family:Tahoma,system-ui,sans-serif}#l-fa:checked~main .en{display:none}#l-fa:checked~main span.fa{display:inline}#l-fa:checked~main div.fa,#l-fa:checked~main p.fa,#l-fa:checked~main ol.fa,#l-fa:checked~main h1.fa,#l-fa:checked~main h2.fa{display:block}#l-en:checked~main nav label[for=l-en],#l-fa:checked~main nav label[for=l-fa]{background:#e3eefc;font-weight:bold}"
+  + "pre{background:#f0f2f5;padding:8px;border-radius:8px;overflow-x:auto;font-size:11px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:4px 8px;border-bottom:1px solid #e5e7eb;text-align:start;vertical-align:top}th{font-weight:600;white-space:nowrap}.ok{color:#177245}.bad{color:#b33}a.plain{color:#2a6fd6}";
 
 // Inline text in both languages; CSS shows one of them (no JavaScript needed).
 function bi(en, fa) {
@@ -1306,6 +1349,9 @@ ${credit}
 }
 
 async function servePanel(cfg, host, port, lang) {
+  STATS.panelViews++;
+  logEvent("panel_view", host);
+  const statusHref = "/" + encodeURIComponent(cfg.adminKey) + "/status";
   const secret = "dd" + bytesToHex(cfg.base);
   const hosts = [];
   for (const h of [host, ...(cfg.extraHosts || [])]) if (h && !hosts.includes(h)) hosts.push(h);
@@ -1350,12 +1396,17 @@ ${manualItems}</div>`;
     "Do not share this page. Share only the links, or the server, port and matching secret.",
     "این صفحه را با کسی به اشتراک نگذارید. فقط لینک‌ها یا سرور، پورت و سکرت مربوطه را بفرستید."
   )}</div>
+<div class="card"><a class="plain" href="${escapeHtml(statusHref)}">${bi("Status &amp; logs", "وضعیت و لاگ‌ها")}</a> <span class="muted">${bi("— live statistics, recent events and a Telegram DC reachability probe.", "— آمار زنده، رویدادهای اخیر و تست دسترسی به دیتاسنترهای تلگرام.")}</span></div>
 ${derivedNote}
 ${sections}`;
   return new Response(bilingualPage("Panel", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
 }
 
-async function serveSetup(host, env, lang) {
+async function serveSetup(host, env, lang, method) {
+  // The setup page is documentation for the operator's browser only; every
+  // other method gets a plain 404 so the worker does not answer API-style
+  // probes with a page that identifies the software.
+  if (method !== "GET" && method !== "HEAD") return notFound();
   const suggested = b64uEncode(crypto.getRandomValues(new Uint8Array(18))).replace(/[-_]/g, "x");
   const current = typeof env?.ADMIN_KEY === "string" ? env.ADMIN_KEY.trim() : "";
   const problem = current && current.length < 16
@@ -1381,6 +1432,95 @@ ${bi("Panel address", "آدرس پنل")}:<textarea class="one" readonly>https:/
     "این رمز را جایی امن نگه دارید. هر کس آن را داشته باشد به پنل دسترسی دارد. با رفرش صفحه رمز جدیدی پیشنهاد می‌شود؛ همان رمزی را استفاده کنید که در کلودفلر ذخیره کرده‌اید."
   )}</p>`;
   return new Response(bilingualPage("Setup", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
+}
+
+function fmtBytes(value) {
+  const n = Number(value) || 0;
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+  return (n / 1073741824).toFixed(2) + " GB";
+}
+
+function fmtDuration(milliseconds) {
+  const total = Math.max(0, Math.floor(milliseconds / 1000));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days) return days + "d " + hours + "h";
+  if (hours) return hours + "h " + minutes + "m";
+  return minutes + "m " + (total % 60) + "s";
+}
+
+// On-demand reachability probe of the Telegram DC front-ends used by this
+// worker. Admin-only, runs only when explicitly requested (?probe=1), keeps
+// at most three TCP sockets in the "connecting" phase and closes them right
+// away. It never leaves the Cloudflare network and stores no results.
+async function probeDcs(cfg) {
+  const keys = Object.keys(cfg.dc).map(Number).sort((a, b) => a - b);
+  const results = [];
+  const probeOne = async (key) => {
+    const ips = Array.isArray(cfg.dc[key]) ? cfg.dc[key] : [cfg.dc[key]];
+    const ip = ips[Math.floor(Math.random() * ips.length)];
+    const started = Date.now();
+    let socket = null;
+    try {
+      socket = connect({ hostname: ip, port: cfg.dcPort || 443 }, { secureTransport: "off" });
+      socket.closed.catch(() => {});
+      await Promise.race([socket.opened, new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2500))]);
+      try { await socket.close(); } catch (_) {}
+      results.push({ dc: key, ip, ok: true, ms: Date.now() - started });
+    } catch (_) {
+      if (socket) { try { socket.close().catch(() => {}); } catch (_) {} }
+      results.push({ dc: key, ip, ok: false, ms: Date.now() - started });
+    }
+  };
+  for (let i = 0; i < keys.length; i += 3) {
+    await Promise.all(keys.slice(i, i + 3).map(probeOne));
+  }
+  logEvent("dc_probe", results.map((r) => "DC" + r.dc + (r.ok ? ":ok" : ":fail")).join(" "));
+  return results;
+}
+
+// Admin status & logs page: /<ADMIN_KEY>/status  (add ?probe=1 for a DC check)
+async function serveStatus(cfg, host, lang, wantsProbe) {
+  STATS.statusViews++;
+  logEvent("status_view", host);
+  const probe = wantsProbe ? await probeDcs(cfg) : null;
+  const secretMode = cfg.secretDerived
+    ? bi("derived from ADMIN_KEY", "مشتق‌شده از ADMIN_KEY")
+    : (cfg.base ? bi("fixed SECRET", "SECRET ثابت") : "-");
+  const infoRows = [
+    [bi("Version", "نسخه"), escapeHtml(VERSION)],
+    [bi("Carrier", "حامل"), escapeHtml(cfg.carrier)],
+    [bi("Secret mode", "حالت سکرت"), secretMode],
+    [bi("Max streams per session", "حداکثر استریم در هر نشست"), String(cfg.maxStreams)],
+    [bi("AD_TAG", "AD_TAG"), cfg.adTag ? bi("set (ignored in Direct-DC mode)", "تنظیم شده (در حالت Direct-DC بی‌اثر)") : bi("not set", "تنظیم نشده")]
+  ].map((row) => `<tr><th>${row[0]}</th><td>${row[1]}</td></tr>`).join("");
+  const statsRows = [
+    [bi("Proxy sessions", "نشست‌های پروکسی"), String(STATS.sessions)],
+    [bi("Active sessions (isolate)", "نشست‌های فعال (این ایزوله)"), String(STATS.sessionsActive)],
+    [bi("Streams opened", "استریم‌های باز شده"), String(STATS.streams)],
+    [bi("DC connects ok / failed", "اتصال‌های DC موفق / ناموفق"), (STATS.dcAttempts - STATS.dcFails) + " / " + STATS.dcFails],
+    [bi("Traffic up / down", "ترافیک بالا / پایین"), fmtBytes(STATS.bytesUp) + " / " + fmtBytes(STATS.bytesDown)],
+    [bi("Rejected WS tokens", "توکن‌های WebSocket ردشده"), String(STATS.wsRejects)],
+    [bi("Isolate uptime", "مدت فعالیت این ایزوله"), fmtDuration(Date.now() - ISOLATE_START)]
+  ].map((row) => `<tr><th>${row[0]}</th><td>${escapeHtml(row[1])}</td></tr>`).join("");
+  const probeBlock = probe
+    ? `<div class="card"><b>${bi("DC reachability probe", "تست دسترسی به دیتاسنترها")}</b><table><tr><th>DC</th><th>IP</th><th>${bi("Result", "نتیجه")}</th></tr>${probe.map((r) => `<tr><td>DC${r.dc}</td><td>${escapeHtml(r.ip)}</td><td class="${r.ok ? "ok" : "bad"}">${r.ok ? "OK" : "FAIL"} (${r.ms} ms)</td></tr>`).join("")}</table></div>`
+    : `<div class="card"><a class="plain" href="?probe=1">${bi("Run DC reachability probe", "اجرای تست دسترسی به دیتاسنترهای تلگرام")}</a><p class="muted">${bi("Opens and immediately closes one TCP socket per DC from this Cloudflare location.", "برای هر دیتاسنتر یک اتصال TCP از همین لوکیشن کلودفلر باز و بلافاصله بسته می‌شود.")}</p></div>`;
+  const logRows = LOG.slice(-60).reverse().map((e) => `<tr><td>${new Date(e.t).toISOString().slice(11, 19)}</td><td>${escapeHtml(e.event)}</td><td>${escapeHtml(e.detail)}</td></tr>`).join("");
+  const logsBlock = `<div class="card"><b>${bi("Recent events", "رویدادهای اخیر")}</b> <span class="muted">${bi("(newest first, isolate memory only)", "(جدیدترین اول، فقط حافظه همین ایزوله)")}</span><table><tr><th>UTC</th><th>event</th><th>detail</th></tr>${logRows || `<tr><td colspan="3">-</td></tr>`}</table></div>`;
+  const body = `<h1>${bi("Proxy status", "وضعیت پروکسی")}</h1>
+<div class="card muted">${bi(
+    "Counters and logs are kept in this Cloudflare isolate only, reset when it is recycled, and are not shared between regions. No client IP addresses, tokens or secrets are recorded.",
+    "شمارنده‌ها و لاگ‌ها فقط در حافظه همین ایزوله کلودفلر نگهداری می‌شوند، با بازیافت ایزوله صفر می‌شوند و بین منطقه‌ها مشترک نیستند. هیچ IP، توکن یا سکرتی ثبت نمی‌شود."
+  )}</div>
+<div class="card"><b>${bi("Configuration", "پیکربندی")}</b><table>${infoRows}</table></div>
+<div class="card"><b>${bi("Live statistics", "آمار زنده")}</b><table>${statsRows}</table></div>
+${probeBlock}
+${logsBlock}`;
+  return new Response(bilingualPage("Status", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
 }
 
 async function issueToken(cfg, kind, ttl, mode) {
@@ -1530,6 +1670,8 @@ class Stream {
   constructor(session, id) {
     this.session = session;
     this.id = id;
+    STATS.streams++;
+    session.streamCount++;
     this.phase = "header";
     this.header = new Uint8Array(64);
     this.headerLength = 0;
@@ -1670,6 +1812,7 @@ class Stream {
     for (let a = 0; a < maxAttempts && !socket; a++) {
       if (this.dead) return;
       const [hostIp, port] = attempts[a];
+      STATS.dcAttempts++;
       let candidateSocket = null;
       let timer = null;
       try {
@@ -1682,6 +1825,7 @@ class Stream {
         socket = candidateSocket;
       } catch (connErr) {
         lastError = connErr;
+        STATS.dcFails++;
         // Previously a timed-out socket stayed pending and kept a connection slot busy.
         if (candidateSocket) { try { candidateSocket.close().catch(() => {}); } catch (_) {} }
       } finally {
@@ -1690,6 +1834,7 @@ class Stream {
     }
 
     if (!socket) {
+      logEvent("dc_fail", `dc=${dcKey}`);
       throw lastError || new Error("failed to connect to DC");
     }
 
@@ -1833,6 +1978,13 @@ class WsSession {
     this.chain = Promise.resolve();
     this.loggedMeNotice = false;
     this.lastPong = Date.now();
+    this.openedAt = Date.now();
+    this.bytesUp = 0;
+    this.bytesDown = 0;
+    this.streamCount = 0;
+    STATS.sessions++;
+    STATS.sessionsActive++;
+    logEvent("session_open", `lane=${laneId} carrier=${cfg.carrier}`);
 
     // Periodic KeepAlive Heartbeat (every 25s)
     // Prevents Cloudflare 100s idle disconnect and ISP/TSPU DPI idle RST injection
@@ -1841,6 +1993,13 @@ class WsSession {
     this.keepAliveTimer = laneId ? null : setInterval(() => {
       if (this.closed || !this.ws || this.ws.readyState !== 1) {
         if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
+        return;
+      }
+      // Pong watchdog: if the client stopped answering keepalives (dead network
+      // path that never sends a close frame), tear the session down instead of
+      // holding its DC sockets and subrequest budget open forever.
+      if (Date.now() - this.lastPong > 90000) {
+        this.shutdown("pong watchdog");
         return;
       }
       try {
@@ -1855,6 +2014,8 @@ class WsSession {
     if (this.closed) return;
     try {
       this.ws.send(bytes);
+      this.bytesDown += bytes.length;
+      STATS.bytesDown += bytes.length;
     } catch (_) {
       this.dispose();
     }
@@ -1889,6 +2050,8 @@ class WsSession {
       this.shutdown();
       return;
     }
+    this.bytesUp += bytes.length;
+    STATS.bytesUp += bytes.length;
     const view = new DataView(data);
     let offset = 0;
     let frames = 0;
@@ -1954,8 +2117,14 @@ class WsSession {
         const stream = this.streams.get(id);
         if (stream) stream.addCredit(new DataView(payload.buffer, payload.byteOffset, 4).getUint32(0, false));
       } else if (type === 0x05) {
-        // PING frame from client (0x05) -> respond with PONG (0x06) echoing payload
+        // PING frame from client (0x05) -> respond with PONG (0x06) echoing payload.
+        // The legitimate bridge ping is 4 bytes; anything larger is refused so the
+        // proxy cannot be used as a reflection amplifier.
         if (id === 0) {
+          if (size > 64) {
+            this.shutdown();
+            return;
+          }
           this.sendFrame(frame(0x06, 0, payload));
         }
       } else if (type === 0x06) {
@@ -1975,6 +2144,8 @@ class WsSession {
   dispose() {
     if (this.closed) return;
     this.closed = true;
+    STATS.sessionsActive = Math.max(0, STATS.sessionsActive - 1);
+    logEvent("session_close", `${fmtDuration(Date.now() - this.openedAt)} streams=${this.streamCount} up=${fmtBytes(this.bytesUp)} down=${fmtBytes(this.bytesDown)}`);
     if (this.keepAliveTimer) {
       clearInterval(this.keepAliveTimer);
       this.keepAliveTimer = null;
@@ -1986,7 +2157,8 @@ class WsSession {
     this.queued = 0;
   }
 
-  shutdown() {
+  shutdown(reason) {
+    logEvent("session_kill", reason || "protocol");
     this.dispose();
     try {
       if (this.ws.readyState === 1) this.ws.close(1011, "closed");
@@ -2005,6 +2177,11 @@ async function serveSession(request, cfg) {
   if (request.method !== "POST") return notFound();
   if (request.headers.get("cookie")) return notFound();
   if ((request.headers.get("content-type") || "").toLowerCase() !== "application/octet-stream") return notFound();
+  // The handshake body is a fixed 9 bytes. Reject an oversized declared body
+  // before buffering it: isolate memory (128 MB) is shared by every session
+  // running in the isolate, so unbounded reads are a memory-DoS vector.
+  const declaredLength = parseInt(request.headers.get("content-length") || "", 10);
+  if (Number.isFinite(declaredLength) && declaredLength > 4096) return notFound();
   const verified = await verifyToken(cfg, token, TOKEN_KIND_BOOTSTRAP);
   if (!verified) return notFound();
   if ((verified.mode === 1 || verified.mode === 2) && !cfg.acceptGenerated) return notFound();
@@ -2047,7 +2224,13 @@ async function serveWebSocket(request, cfg, host, port) {
     return notFound();
   }
   const verified = await verifyToken(cfg, token, TOKEN_KIND_SESSION);
-  if (!verified) return notFound();
+  if (!verified) {
+    // A real WebSocket upgrade with an invalid/expired token is either a
+    // forgery attempt or a client whose token expired - worth a log line.
+    STATS.wsRejects++;
+    logEvent("ws_reject", "invalid or expired session token");
+    return notFound();
+  }
   if ((verified.mode === 1 || verified.mode === 2) && !cfg.acceptGenerated) return notFound();
   let secret = cfg.base;
   if (verified.mode >= PORT_MODE_BASE && verified.mode < PORT_MODE_BASE + HTTPS_PORTS.length) {
@@ -2087,20 +2270,29 @@ export default {
 
       const cfg = await getRuntime(env);
       const lang = url.searchParams.get("lang") === "fa" ? "fa" : "en";
-      // Not configured yet: show a step-by-step setup page (nothing to protect yet).
-      if (!cfg) return serveSetup(host, env, lang);
+      // Not configured yet: the step-by-step setup page is served on "/" only.
+      // Every other path or method answers 404 so an unconfigured worker does
+      // not advertise what it is to scanners probing random paths.
+      if (!cfg) {
+        if (url.pathname === "/") return serveSetup(host, env, lang, request.method);
+        return notFound();
+      }
       // Configured with SECRET only (older setup, no ADMIN_KEY yet): the site stays
       // camouflaged, but /setup explains how to add ADMIN_KEY. It reveals no secret.
-      if (!cfg.adminKey && url.pathname === "/setup") return serveSetup(host, env, lang);
+      if (!cfg.adminKey && url.pathname === "/setup") return serveSetup(host, env, lang, request.method);
 
       // Admin panel: https://host/<ADMIN_KEY>  (or legacy ?create-secret&key=<ADMIN_KEY>)
-      if (request.method === "GET" && panelRequested(url, cfg)) return servePanel(cfg, host, port, lang);
+      // Admin status & logs: https://host/<ADMIN_KEY>/status  (?probe=1 runs a DC check)
+      if (request.method === "GET") {
+        const route = panelRoute(url, cfg);
+        if (route === "status") return serveStatus(cfg, host, lang, url.searchParams.get("probe") === "1");
+        if (route === "panel") return servePanel(cfg, host, port, lang);
+      }
 
       // Legacy per-domain secret generator (ACCEPT_GENERATED); also gated by ADMIN_KEY.
       const label = generatorLabel(url);
       if (label !== null) {
-        const generatorEnabled = env?.GENERATOR_ENABLED === "true" || env?.GENERATOR_ENABLED === "1";
-        if (!generatorEnabled || !cfg.adminKey || !label || !safeEqual(url.searchParams.get("key") || "", cfg.adminKey)) {
+        if (!cfg.generatorEnabled || !cfg.adminKey || !label || !safeEqual(url.searchParams.get("key") || "", cfg.adminKey)) {
           return decoy(cfg.decoyUrl, request.method);
         }
         return serveSecret(cfg, host, label, port);
@@ -2117,7 +2309,7 @@ export default {
         const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#1a1a1a"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="800" font-size="14" fill="#fff" letter-spacing="2">LV</text></svg>`;
         return new Response(request.method === "HEAD" ? null : svgIcon, {
           status: 200,
-          headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400" }
+          headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff" }
         });
       }
       if (url.pathname === "/health" || url.pathname === "/status") {
