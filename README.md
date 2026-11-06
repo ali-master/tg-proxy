@@ -114,6 +114,18 @@ Where to enter them in Telegram:
 
 **Done.** To share the proxy, send people **the links or the connection values (server, port, and that port's secret)**. Never send the panel address.
 
+### Live Status & Diagnostics
+
+To verify your proxy is running, monitor real-time traffic, or diagnose connection issues:
+
+```text
+https://tg.yourdomain.com/YOUR_ADMIN_KEY/status
+```
+
+- **Live Statistics:** Active sessions, streams opened, bandwidth up/down, and isolate uptime.
+- **DC Probe:** Run an on-demand latency & reachability check directly from Cloudflare to all Telegram Data Centers (DC1–DC5).
+- **Privacy-first:** Metrics and event logs are kept strictly in isolate memory and reset automatically; no IP addresses, tokens, or secrets are ever stored.
+
 ---
 
 ## Ports
