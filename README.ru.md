@@ -19,6 +19,20 @@
 
 ---
 
+## 📺 Видеоинструкция по настройке
+
+> [!TIP]
+> Предпочитаете наглядное руководство? Посмотрите подробный пошаговый видеоурок на YouTube:  
+> ▶️ **[Смотреть видео на YouTube](https://youtu.be/7StSCQdpqvk)** *(наглядная демонстрация всех шагов)*
+
+<p align="center">
+  <a href="https://youtu.be/7StSCQdpqvk">
+    <img src="https://img.youtube.com/vi/7StSCQdpqvk/maxresdefault.jpg" alt="Видеоинструкция ProxyGosha" width="700">
+  </a>
+</p>
+
+---
+
 ## Что это такое
 
 В Telegram появился новый тип прокси под названием **WEB**. В отличие от классического MTProto-прокси, его трафик выглядит как обычный HTTPS, поэтому он может без проблем работать через Cloudflare.

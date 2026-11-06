@@ -19,6 +19,20 @@
 
 ---
 
+## 📺 视频安装配置教程
+
+> [!TIP]
+> 如果您更喜欢直观的视频演示，可以在 YouTube 上观看完整的分步配置指南：  
+> ▶️ **[在 YouTube 上观看视频教程](https://youtu.be/7StSCQdpqvk)** *(附带清晰明了的屏幕操作演示)*
+
+<p align="center">
+  <a href="https://youtu.be/7StSCQdpqvk">
+    <img src="https://img.youtube.com/vi/7StSCQdpqvk/maxresdefault.jpg" alt="ProxyGosha 视频教程" width="700">
+  </a>
+</p>
+
+---
+
 ## 这是什么
 
 Telegram 推出了一种名为 **WEB** 的新型代理协议。与传统的 MTProto 代理不同，它的流量形态与普通的 HTTPS 流量完全一致，因此可以顺畅运行在 Cloudflare 之后。

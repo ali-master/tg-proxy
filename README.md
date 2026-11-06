@@ -19,6 +19,20 @@
 
 ---
 
+## 📺 Video Tutorial
+
+> [!TIP]
+> Prefer a visual walkthrough? Watch the complete step-by-step setup tutorial on YouTube:  
+> ▶️ **[Watch the Tutorial on YouTube](https://youtu.be/7StSCQdpqvk)** *(with clear on-screen instructions)*
+
+<p align="center">
+  <a href="https://youtu.be/7StSCQdpqvk">
+    <img src="https://img.youtube.com/vi/7StSCQdpqvk/maxresdefault.jpg" alt="ProxyGosha Video Tutorial" width="700">
+  </a>
+</p>
+
+---
+
 ## What this is
 
 Telegram added a new proxy type called **WEB**. Unlike the classic MTProto proxy, it travels as ordinary HTTPS traffic, so it can run behind Cloudflare.
