@@ -11,10 +11,10 @@
 
 <p align="center">
   <a href="README.md"><b>English</b></a> •
-  <a href="README.fa.md"><b>فارسی</b></a> •
-  <a href="README.ru.md"><b>Русский</b></a> •
-  <a href="README.zh.md"><b>简体中文</b></a> •
-  <a href="llms.txt"><b>llms.txt</b></a>
+  <a href="docs/README.fa.md"><b>فارسی</b></a> •
+  <a href="docs/README.ru.md"><b>Русский</b></a> •
+  <a href="docs/README.zh.md"><b>简体中文</b></a> •
+  <a href="docs/llms.txt"><b>llms.txt</b></a>
 </p>
 
 ---

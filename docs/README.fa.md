@@ -6,11 +6,11 @@
   <a href="https://github.com/amirmarandidev/ProxyGosha/stargazers"><img src="https://img.shields.io/github/stars/amirmarandidev/ProxyGosha?style=for-the-badge&color=gold" alt="GitHub Stars"></a>
   <a href="https://workers.cloudflare.com/"><img src="https://img.shields.io/badge/Cloudflare-Workers-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="Cloudflare Workers"></a>
   <a href="https://desktop.telegram.org/"><img src="https://img.shields.io/badge/Telegram-WEB%20Proxy-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram WEB Proxy"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="License MIT"></a>
+  <a href="../LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="License MIT"></a>
 </p>
 
 <p align="center">
-  <a href="README.md"><b>English</b></a> •
+  <a href="../README.md"><b>English</b></a> •
   <a href="README.fa.md"><b>فارسی</b></a> •
   <a href="README.ru.md"><b>Русский</b></a> •
   <a href="README.zh.md"><b>简体中文</b></a> •
@@ -87,7 +87,7 @@
 ### مرحله ۲ — چسباندن کد
 
 1. در صفحه ورکر، روی **Edit code** کلیک کنید.
-2. تمام محتوای داخل ادیتور را پاک کرده و متن کامل فایل [`worker.js`](worker.js) را جایگذاری کنید.
+2. تمام محتوای داخل ادیتور را پاک کرده و متن کامل فایل [`worker.js`](../worker.js) را جایگذاری کنید.
 3. روی **Deploy** کلیک کنید.
 
 ### مرحله ۳ — تنظیم کلید ادمین (تنها تنظیم الزامی)
