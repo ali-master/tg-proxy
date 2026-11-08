@@ -31,6 +31,25 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://t.me/amirdotlog"><img src="https://img.shields.io/badge/Telegram-amirdotlog-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Channel"></a>
+  <a href="https://www.youtube.com/@amirmarandidev"><img src="https://img.shields.io/badge/YouTube-amirmarandidev-red?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube Channel"></a>
+</p>
+
+> [!NOTE]
+> 📢 **Telegram Updates Channel:** Join our channel for clean domains, latest announcements, and setup tips: **[t.me/amirdotlog](https://t.me/amirdotlog)**  
+> 🔴 **YouTube Channel:** Subscribe for video tutorials and technical anti-censorship walkthroughs: **[youtube.com/@amirmarandidev](https://www.youtube.com/@amirmarandidev)**
+
+---
+
+## 🚀 What's New in v1.2.2
+
+This release brings major connection reliability improvements, protocol optimizations, and built-in diagnostics:
+
+- 🛠️ **Bug Fixes & Connection Stability:** Fixed intermittent connection issues, eliminated socket leaks on timeouts, removed invalid test endpoints, and updated official Telegram DC IPs for stable failover.
+- ⚡ **Optimized Data Coalescing (Upstream Batching):** Small MTProto upstream data frames are now coalesced into batches before encrypting and sending to Telegram DCs, drastically cutting WebCrypto CPU cycles on Cloudflare Workers.
+- 📊 **Live Telemetry & Diagnostics (Special thanks to EmadReza):** Added the `/<ADMIN_KEY>/status` dashboard, providing real-time metrics (active sessions, bandwidth, isolate uptime) and an on-demand Telegram DC Reachability Probe (DC1–DC5).
+
 ---
 
 ## What this is
@@ -87,6 +106,25 @@ You need:
 1. Add your domain to Cloudflare. Cloudflare will show you two nameservers. Set those nameservers at the company you bought the domain from.
 2. In your Worker, go to **Settings** → **Domains & Routes** → **Add** → **Custom Domain**.
 3. Enter a subdomain, for example `tg.yourdomain.com`. Cloudflare sets up the certificate and DNS automatically.
+
+#### 🌐 Domain Setup Guide (Why a Custom Domain is Required)
+
+Many users have asked whether a custom domain is mandatory and where to acquire one:
+
+> [!WARNING]
+> The default Cloudflare **`workers.dev`** domain is blocked by default in state firewalls across **Iran**, **China**, **Russia**, and other heavily filtered regions.  
+> To guarantee stable connectivity across all network providers, **you must attach a custom domain to your Worker.**
+
+### Options for acquiring a domain:
+
+- ☑️ **Free Domains:**  
+  You can register a free domain using services such as **[digitalplat](https://domain.digitalplat.org/)** and bind it to Cloudflare at no cost.
+- ❇️ **Country-Code Domains (e.g. `.ir` for Iran, `.ru` for Russia, etc.):**  
+  - National ccTLDs can be used for your proxy.  
+  - ⚠️ **Caution:** Exercise caution and avoid hazardous activities when using personally identifiable national domains.  
+  - National domains are typically very cheap, but identity verification and registration approval (e.g., via [nic.ir](https://nic.ir/)) often takes **1–2 business days**.
+- ‼️ **Low-Cost International Domains (Crypto / International Cards):**  
+  If you have access to cryptocurrency or international payment methods, registrars like **[Namecheap](https://namecheap.com/)** offer bargain TLDs (such as `.xyz` or `.top`) often priced under $1.
 
 ### Step 5 — Open your panel and connect
 

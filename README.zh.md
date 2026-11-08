@@ -31,6 +31,25 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://t.me/amirdotlog"><img src="https://img.shields.io/badge/Telegram-amirdotlog-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram Channel"></a>
+  <a href="https://www.youtube.com/@amirmarandidev"><img src="https://img.shields.io/badge/YouTube-amirmarandidev-red?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube Channel"></a>
+</p>
+
+> [!NOTE]
+> 📢 **Telegram 官方频道：** 获取纯净可用域名、最新更新公告与搭建技巧：**[t.me/amirdotlog](https://t.me/amirdotlog)**  
+> 🔴 **YouTube 视频频道：** 订阅获取更多视频教程与抗审查技术解析：**[youtube.com/@amirmarandidev](https://www.youtube.com/@amirmarandidev)**
+
+---
+
+## 🚀 v1.2.2 版本更新内容
+
+本次更新带来了重大的连接可靠性改进、底层传输协议优化以及内置状态诊断功能：
+
+- 🛠️ **修复连接问题与提升稳定性：** 解决了超时导致的套接字泄漏 (Socket leak)，剔除无效的测试 DC 端点，全面更新 Telegram 官方数据中心 IP 列表。
+- ⚡ **上行数据合并优化 (Upstream Batching)：** 将客户端发送的零散小数据帧在上行前合并批量处理，显著减少 WebCrypto 繁琐加解密开销，大幅降低 Worker 实例的 CPU 占用。
+- 📊 **实时监控与诊断仪表盘 (特别鸣谢 EmadReza)：** 新增 `/<ADMIN_KEY>/status` 管理页，提供活跃会话数、流量吞吐、实例运行时间统计，并支持一键发起 Telegram 数据中心 (DC1–DC5) 连通性与延迟探测 (DC Probe)。
+
 ---
 
 ## 这是什么
@@ -87,6 +106,25 @@ ProxyGosha 正是将一个免费的 Cloudflare Worker 变成这样一个私有�
 1. 将您的域名托管到 Cloudflare。Cloudflare 会给出两个 DNS 名称服务器（NS 地址）。请前往您购买域名的服务商处将 DNS 服务器修改为 Cloudflare 指定的地址。
 2. 在该 Worker 页面中，前往 **设置** → **域和路由** (Domains & Routes) → **添加** → **自定义域**。
 3. 输入一个二级子域名，例如 `tg.yourdomain.com`。Cloudflare 将全自动完成 SSL 证书签发与 DNS 路由解析。
+
+#### 🌐 域名选择与配置指南 (为什么必须绑定自定义域)
+
+很多朋友询问是否必须准备自定义域名以及该如何获取：
+
+> [!WARNING]
+> 目前 Cloudflare 默认分配的 **`workers.dev`** 子域名在**伊朗**、**中国大陆**、**俄罗斯**等国家和地区的网络防火墙中普遍已被阻断或干扰。  
+> 为了确保代理能够在所有网络运营商环境下稳定畅通，**必须为您的 Worker 绑定一个自定义独立域名。**
+
+### 获取域名的常用途径：
+
+- ☑️ **免费域名方案：**  
+  您可以优先通过支持免费域名的平台（例如 **[digitalplat](https://domain.digitalplat.org/)**）申请免费域名，并免付费接入 Cloudflare 使用。
+- ❇️ **国家顶级域名 (如伊朗 `.ir`、俄罗斯 `.ru` 等)：**  
+  - 也可以使用各国家/地区本地域名。  
+  - ⚠️ **安全注意：** 使用实名制国家域名时请保持谨慎，切勿用于违规高风险操作。  
+  - 尽管国家后缀通常较为廉价，但实名认证与资质审核审核（如 [nic.ir](https://nic.ir/)）通常需要 **1–2 个工作日**。
+- ‼️ **购买廉价国际域名 (支持数字货币或境外卡支付)：**  
+  如果您具备外币卡或加密货币支付条件，可以通过 **[Namecheap](https://namecheap.com/)** 等国际注册商购买低价专属后缀（如 `.xyz`、`.top` 等，通常首年仅需几美分或 1 美元以下），即买即用非常方便。
 
 ### 第 5 步 — 打开管理面板并一键连接
 

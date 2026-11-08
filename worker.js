@@ -131,7 +131,7 @@ const ME_CONSTANTS = {
 const HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
 
 // Release version of this worker build (shown on the admin status page).
-const VERSION = "1.1.0";
+const VERSION = "1.2.2";
 
 const CONFIG = {
   secretHex: "",                // Overridden by env.SECRET (32 hex or dd+32 hex)
