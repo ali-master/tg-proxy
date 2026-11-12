@@ -2305,6 +2305,10 @@ async function serveWebSocket(request, cfg, host, port) {
   if (request.method !== "GET") return notFound();
   if ((request.headers.get("upgrade") || "").toLowerCase() !== "websocket") return notFound();
   if (request.headers.get("authorization")) return notFound();
+  // Only the bridge page on this same origin opens carrier sockets; a browser page
+  // elsewhere that got hold of a token cannot (non-browser clients send no Origin).
+  const origin = request.headers.get("origin");
+  if (origin && origin !== new URL(request.url).origin) return notFound();
   const offered = (request.headers.get("sec-websocket-protocol") || "").split(",").map((value) => value.trim()).filter(Boolean);
   if (offered.length !== 1) return notFound();
   const protocol = offered[0];
