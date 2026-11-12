@@ -111,22 +111,6 @@ import { connect } from "cloudflare:sockets";
  * ============================================================================
  */
 
-// Middle-End Protocol Constants (Documented for specification completeness)
-const ME_CONSTANTS = {
-  RPC_NONCE: 0x7acb87aa,        // Little-endian: 0xaa, 0x87, 0xcb, 0x7a
-  RPC_HANDSHAKE: 0x7682eef5,    // Little-endian: 0xf5, 0xee, 0x82, 0x76
-  RPC_FLAGS: 0x00000000,
-  CRYPTO_AES: 0x00000001,
-  RPC_PROXY_REQ: 0x36cef1ee,    // Little-endian: 0xee, 0xf1, 0xce, 0x36
-  RPC_PROXY_ANS: 0x0dfb190e,    // Little-endian: 0x0e, 0x19, 0xfb, 0x0d
-  FLAG_HAS_AD_TAG: 0x00000008,
-  FLAG_EXTMODE2: 0x00020000,
-  FLAG_PAD: 0x08000000,
-  FLAG_INTERMEDIATE: 0x20000000,
-  FLAG_ABRIDGED: 0x40000000,
-  FLAG_QUICKACK: 0x80000000
-};
-
 // Default Configuration fallback (overridden by dashboard environment variables)
 const HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
 
@@ -386,11 +370,10 @@ const relayBase=location.origin+'/',bootstrap=__BOOTSTRAP__,carrierMode=__CARRIE
 const fragment=location.hash,androidNonce=/^#android=([A-Za-z0-9_-]{43})$/.exec(fragment)?.[1]||'';
 history.replaceState(null,'',location.pathname);
 let initialized=false,closed=false,port=null,sessionToken='',createStarted=false;
-let queuedBytes=0,queuedItems=0,pollController=null,webSocket=null,webSocketTimer=0;
+let queuedBytes=0,queuedItems=0,webSocket=null,webSocketTimer=0;
 const pending=[],upPending=[],lanes=new Map(),closedLanes=new Set(),closedLaneOrder=[];
 const queueLimit=33554432,queueItemLimit=16384,closedLaneLimit=4096;
 const laneQueueLimit=8388608,laneItemLimit=1024,batchLimit=__BATCH_LIMIT__;
-let upSequence=1,downCursor='0',upRunning=false;
 let pingTimer=0,reconnectAttempts=0,reconnecting=false,laneOpenFailures=0;
 const openStreams=new Set();
 function trackFrames(value,up){
@@ -525,7 +508,6 @@ async function createSession(first){
   const response=await request(sessionPath,()=>options('POST',bootstrap,first));
   if(response.status!==200||response.headers.get('X-Carrier-Mode')!==carrierMode)throw new Error('session creation rejected');
   sessionToken=response.headers.get('X-Session-Token')||'';
-  downCursor=response.headers.get('X-Down-Cursor')||'0';
   if(!sessionToken)throw new Error('missing session token');
   if(closed){fetch(relayBase+sessionPath,options('DELETE',sessionToken,null,null,undefined,true)).catch(()=>{});return}
   const welcome=await response.arrayBuffer();
@@ -534,103 +516,23 @@ async function createSession(first){
   port.postMessage(welcome,[welcome]);
   status('connected');
   for(const data of pending.splice(0)){release(data.byteLength,1,null);queueCarrier(data)}
-  if(carrierMode==='https')poll();
-  else if(carrierMode==='https-lanes')pollLane(ensureLane(0));
  }catch(error){fail()}
 }
 function queueCarrier(data){
  try{
-  if(carrierMode==='https')queueUp(data);
-  else if(carrierMode==='https-lanes')for(const value of splitFrames(data))queueLane(value);
-  else if(carrierMode==='websocket')queueWebSocket(data);
+  if(carrierMode==='websocket')queueWebSocket(data);
   else for(const value of splitFrames(data))queueWebSocketLane(value);
  }catch(error){fail()}
 }
-function queueUp(data){
- if(!reserve(data,null)){fail();return}
- upPending.push(data);runUp();
-}
-async function runUp(){
- if(upRunning)return;
- upRunning=true;
- try{
-  while(!closed&&sessionToken&&upPending.length){
-   const batch=joinPending(upPending,null),sequence=String(upSequence);
-   const response=await request('api/v1/up',()=>options('POST',sessionToken,batch.body,{'X-Up-Seq':sequence}));
-   if(response.status!==204||response.headers.get('X-Up-Ack')!==sequence)throw new Error('uplink rejected');
-   release(batch.total,batch.count,null);port.postMessage({t:'traffic',up:batch.total,down:0});upSequence++;
-  }
- }catch(error){fail()}
- finally{upRunning=false;if(!closed&&sessionToken&&upPending.length)runUp()}
-}
-async function poll(){
- while(!closed&&sessionToken){
-  try{
-   pollController=new AbortController();
-   const response=await request('api/v1/down',()=>options('POST',sessionToken,null,{'X-Down-Cursor':downCursor},pollController.signal));
-   if(response.status===204){status('connected');continue}
-   if(response.status!==200)throw new Error('downlink rejected');
-   const next=response.headers.get('X-Down-Cursor')||'',data=await response.arrayBuffer();
-   if(!next||!data.byteLength)throw new Error('invalid downlink response');
-   if(closed)return;
-   port.postMessage({t:'traffic',up:0,down:data.byteLength});port.postMessage(data,[data]);downCursor=next;status('connected');
-  }catch(error){if(!closed)fail();return}
- }
-}
 function ensureLane(id){
  let lane=lanes.get(id);
- if(!lane){lane={id,sequence:1,cursor:'0',pending:[],bytes:0,items:0,running:false,polling:false,socket:null,timer:0,opened:false,localClosed:false,remoteClosed:false,finished:false};lanes.set(id,lane)}
+ if(!lane){lane={id,pending:[],bytes:0,items:0,socket:null,timer:0,opened:false,localClosed:false,remoteClosed:false,finished:false};lanes.set(id,lane)}
  return lane;
 }
 function rememberLaneClosed(id){
  if(!id||closedLanes.has(id))return;
  if(closedLaneOrder.length===closedLaneLimit)closedLanes.delete(closedLaneOrder.shift());
  closedLanes.add(id);closedLaneOrder.push(id);
-}
-function queueLane(value){
- let lane=lanes.get(value.id);
- if(!lane&&(value.type===2||value.type===3||value.type===4))return;
- if(!lane&&closedLanes.has(value.id))throw new Error('closed lane was reused');
- if(!lane&&value.type!==1)throw new Error('lane did not begin with OPEN');
- lane=lane||ensureLane(value.id);
- if(!reserve(value.data,lane)){fail();return}
- lane.pending.push(value.data);runLaneUp(lane);
-}
-async function runLaneUp(lane){
- if(lane.running)return;
- lane.running=true;
- try{
-  while(!closed&&sessionToken&&lane.pending.length){
-   const batch=joinPending(lane.pending,lane),sequence=String(lane.sequence),laneID=String(lane.id);
-   const response=await request('api/v1/up',()=>options('POST',sessionToken,batch.body,{'X-Up-Seq':sequence,'X-Lane-ID':laneID}));
-   if(response.status!==204||response.headers.get('X-Up-Ack')!==sequence)throw new Error('lane uplink rejected');
-   release(batch.total,batch.count,lane);port.postMessage({t:'traffic',up:batch.total,down:0});lane.sequence++;
-   if(!lane.polling)pollLane(lane);
-  }
- }catch(error){fail()}
- finally{lane.running=false;if(!closed&&sessionToken&&lane.pending.length)runLaneUp(lane)}
-}
-async function pollLane(lane){
- if(lane.polling)return;
- lane.polling=true;
- try{
-  while(!closed&&sessionToken&&lanes.get(lane.id)===lane){
-   const controller=new AbortController(),laneID=String(lane.id);
-   lane.controller=controller;
-   const response=await request('api/v1/down',()=>options('POST',sessionToken,null,{'X-Down-Cursor':lane.cursor,'X-Lane-ID':laneID},controller.signal));
-   if(response.status===204){
-    if(response.headers.get('X-Lane-Closed')==='1'){lanes.delete(lane.id);rememberLaneClosed(lane.id);return}
-    status('connected');continue;
-   }
-   if(response.status!==200)throw new Error('lane downlink rejected');
-   const next=response.headers.get('X-Down-Cursor')||'',data=await response.arrayBuffer();
-   if(!next||!data.byteLength)throw new Error('invalid lane downlink response');
-   for(const value of splitFrames(data))if(value.id!==lane.id)throw new Error('cross-lane frame');
-   if(closed)return;
-   port.postMessage({t:'traffic',up:0,down:data.byteLength});port.postMessage(data,[data]);lane.cursor=next;status('connected');
-  }
- }catch(error){if(!closed)fail()}
- finally{lane.polling=false;lane.controller=null}
 }
 function openWebSocket(){
  return new Promise((resolve,reject)=>{
@@ -768,9 +670,7 @@ function close(notifyServer){
  if(closed)return;
  closed=true;
  stopHeartbeat();
- if(pollController)pollController.abort();
  for(const lane of lanes.values()){
-  if(lane.controller)lane.controller.abort();
   if(lane.timer)clearTimeout(lane.timer);
   if(lane.socket)try{lane.socket.close()}catch(error){}
  }
