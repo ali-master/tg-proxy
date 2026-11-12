@@ -1553,8 +1553,12 @@ async function verifyToken(cfg, token, kind) {
 async function decoy(decoyUrl, requestMethod = "GET") {
   if (decoyUrl && typeof decoyUrl === "string" && (decoyUrl.startsWith("http://") || decoyUrl.startsWith("https://"))) {
     try {
+      // Bounded and edge-cached: scanners must not hang requests or burn a
+      // subrequest on every probe; on timeout the built-in page is served.
       const upstream = await fetch(decoyUrl, {
         method: requestMethod === "HEAD" ? "HEAD" : "GET",
+        signal: AbortSignal.timeout(3000),
+        cf: { cacheEverything: true, cacheTtl: 300 },
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
