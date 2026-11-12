@@ -1235,6 +1235,11 @@ function panelRoute(url, cfg) {
   return null;
 }
 
+// Estedad (OFL-1.1, github.com/aminabedi68/Estedad), variable weight 100-900,
+// loaded straight from the GitHub repository and pinned to one commit so it never
+// changes under us. If GitHub is unreachable the system font stack takes over.
+const FONT_URL = "https://raw.githubusercontent.com/aminabedi68/Estedad/0dbe689787b8c2ea302373cb601d0f352f9f98e5/fonts/webfonts/Estedad%5Bwght%5D.woff2";
+
 function pageHeaders() {
   return {
     "Content-Type": "text/html; charset=utf-8",
@@ -1244,13 +1249,134 @@ function pageHeaders() {
     "X-Content-Type-Options": "nosniff",
     "Strict-Transport-Security": "max-age=31536000",
     "X-Frame-Options": "DENY",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; font-src https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
   };
 }
 
-const PAGE_STYLE = "body{font-family:system-ui,-apple-system,'Segoe UI',Tahoma,sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#f6f7f9;color:#1d2330;line-height:1.8}h1{font-size:21px;margin:8px 0 4px}h2{font-size:16px;margin-top:28px}.card{background:#fff;border-radius:12px;padding:12px 16px;margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}a.btn{display:block;text-align:center;background:#2a9df4;color:#fff;text-decoration:none;padding:10px;border-radius:10px;margin:6px 0;font-weight:bold}code,textarea{direction:ltr;text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:12px}textarea{width:100%;height:58px;box-sizing:border-box;border:1px solid #ccd;border-radius:8px;padding:6px}textarea.one{height:34px}.muted{color:#667;font-size:13px}.warn{background:#fff4e5;border-inline-start:4px solid #f0a020}footer.credit{margin:32px 0 8px;text-align:center;font-size:12px;color:#889;direction:ltr}footer.credit a{color:#667}ol{padding-inline-start:22px;margin:4px 0}nav.lang{text-align:end;font-size:14px}nav.lang label{cursor:pointer;padding:4px 10px;border-radius:8px;color:#2a6fd6}"
-  + ".fa{display:none}#l-fa:checked~main{direction:rtl;font-family:Tahoma,system-ui,sans-serif}#l-fa:checked~main .en{display:none}#l-fa:checked~main span.fa{display:inline}#l-fa:checked~main div.fa,#l-fa:checked~main p.fa,#l-fa:checked~main ol.fa,#l-fa:checked~main h1.fa,#l-fa:checked~main h2.fa{display:block}#l-en:checked~main nav label[for=l-en],#l-fa:checked~main nav label[for=l-fa]{background:#e3eefc;font-weight:bold}"
-  + "pre{background:#f0f2f5;padding:8px;border-radius:8px;overflow-x:auto;font-size:11px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:4px 8px;border-bottom:1px solid #e5e7eb;text-align:start;vertical-align:top}th{font-weight:600;white-space:nowrap}.ok{color:#177245}.bad{color:#b33}a.plain{color:#2a6fd6}";
+const PAGE_STYLE = `
+@font-face{font-family:Estedad;src:url("${FONT_URL}") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
+:root{color-scheme:light dark;
+--bg:#f5f5f7;--text:#1d1d1f;--muted:#6e6e73;--faint:#86868b;
+--card:rgba(255,255,255,.74);--solid:#fff;--border:rgba(0,0,0,.07);--sep:rgba(60,60,67,.13);
+--fill:rgba(118,118,128,.09);--fill2:rgba(118,118,128,.16);
+--blue:#0071e3;--blue2:#0077ed;--ring:rgba(0,113,227,.35);
+--green:#1d8a3a;--green-t:rgba(52,199,89,.15);--red:#d70015;--red-t:rgba(255,59,48,.12);
+--amber:#b25000;--amber-t:rgba(255,159,10,.13);--amber-dot:#ff9f0a;
+--g1:rgba(0,113,227,.20);--g2:rgba(175,82,222,.16);--g3:rgba(52,199,89,.12);
+--shadow:0 .5px 1px rgba(0,0,0,.03),0 6px 20px -4px rgba(0,0,0,.06),0 24px 48px -24px rgba(0,0,0,.10)}
+@media (prefers-color-scheme:dark){:root{
+--bg:#000;--text:#f5f5f7;--muted:#a1a1a6;--faint:#8e8e93;
+--card:rgba(28,28,30,.70);--solid:#2c2c2e;--border:rgba(255,255,255,.08);--sep:rgba(84,84,88,.42);
+--fill:rgba(118,118,128,.18);--fill2:rgba(118,118,128,.28);
+--blue:#0a84ff;--blue2:#409cff;--ring:rgba(10,132,255,.45);
+--green:#30d158;--green-t:rgba(48,209,88,.16);--red:#ff453a;--red-t:rgba(255,69,58,.16);
+--amber:#ffb340;--amber-t:rgba(255,159,10,.14);--amber-dot:#ff9f0a;
+--g1:rgba(10,132,255,.26);--g2:rgba(191,90,242,.20);--g3:rgba(48,209,88,.10);
+--shadow:0 .5px 0 rgba(255,255,255,.04) inset,0 10px 30px -8px rgba(0,0,0,.6)}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font:15px/1.7 Estedad,-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;overflow-x:hidden}
+body::before{content:"";position:fixed;z-index:0;left:-20vw;right:-20vw;top:-30vh;height:95vh;pointer-events:none;
+background:radial-gradient(38% 46% at 22% 34%,var(--g1),transparent 70%),radial-gradient(34% 42% at 78% 22%,var(--g2),transparent 70%),radial-gradient(40% 40% at 56% 78%,var(--g3),transparent 72%);filter:blur(48px)}
+main{position:relative;z-index:1;max-width:880px;margin:0 auto;padding:16px 20px 56px}
+a{color:var(--blue)}
+::selection{background:var(--ring)}
+.glass{background:var(--card);border:.5px solid var(--border);box-shadow:var(--shadow);-webkit-backdrop-filter:saturate(180%) blur(24px);backdrop-filter:saturate(180%) blur(24px)}
+.top{position:sticky;top:12px;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 40px;padding:8px;padding-inline-start:12px;border-radius:18px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px;letter-spacing:-.01em}
+.logo{flex:none;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(140deg,#5ac8fa 0%,#0a84ff 48%,#5e5ce6 100%);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.35),0 4px 12px -2px rgba(10,132,255,.55)}
+.logo svg{width:16px;height:16px;fill:#fff;transform:translateX(-.5px)}
+nav.lang{display:inline-flex;padding:2px;border-radius:10px;background:var(--fill)}
+nav.lang label{cursor:pointer;padding:4px 14px;border-radius:8px;font-size:13px;font-weight:600;color:var(--muted);transition:background .25s,color .25s,box-shadow .25s;user-select:none}
+#l-en:checked~main nav label[for=l-en],#l-fa:checked~main nav label[for=l-fa]{background:var(--solid);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04)}
+.hero{margin:0 4px 28px}
+.eyebrow{display:block;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:clamp(32px,6vw,48px);line-height:1.08;font-weight:800;letter-spacing:-.03em;margin:6px 0 10px;background:linear-gradient(180deg,var(--text) 40%,var(--muted));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.lead{font-size:clamp(16px,2.4vw,19px);line-height:1.6;color:var(--muted);margin:0;max-width:62ch}
+h2{display:flex;align-items:center;gap:10px;font-size:22px;font-weight:700;letter-spacing:-.02em;margin:44px 4px 4px;direction:ltr;unicode-bidi:isolate}
+#l-fa:checked~main h2{justify-content:flex-end}
+h2 .dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px var(--green-t)}
+.sub{margin:0 4px 14px;color:var(--muted);font-size:14px}
+.card{position:relative;border-radius:22px;padding:20px 22px;margin:12px 0;animation:rise .6s cubic-bezier(.2,.8,.2,1) both}
+.card-title{display:block;font-size:17px;font-weight:700;letter-spacing:-.01em;margin:0 0 6px}
+.card p{margin:4px 0}
+.muted{color:var(--muted);font-size:13.5px}
+.warn{background:var(--amber-t);border-color:transparent;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none;padding-inline-start:58px;color:var(--text)}
+.warn::before{content:"!";position:absolute;inset-inline-start:20px;top:21px;width:24px;height:24px;border-radius:50%;background:var(--amber-dot);color:#fff;font:800 14px/24px -apple-system,system-ui,sans-serif;text-align:center}
+.ports{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;margin:14px 0}
+.ports .card{margin:0;display:flex;flex-direction:column;transition:transform .35s cubic-bezier(.2,.8,.2,1),box-shadow .35s}
+.ports .card:hover{transform:translateY(-3px);box-shadow:var(--shadow),0 18px 40px -18px var(--ring)}
+.ports .card:nth-child(2){animation-delay:.04s}.ports .card:nth-child(3){animation-delay:.08s}.ports .card:nth-child(4){animation-delay:.12s}.ports .card:nth-child(5){animation-delay:.16s}.ports .card:nth-child(6){animation-delay:.2s}
+.port-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.port-num{font-size:40px;line-height:1.05;font-weight:800;letter-spacing:-.02em;margin:4px 0 14px;direction:ltr;text-align:start}
+#l-fa:checked~main .port-num{text-align:right}
+.badge{font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:999px;background:var(--green-t);color:var(--green);white-space:nowrap}
+a.btn{display:flex;align-items:center;justify-content:center;gap:8px;margin:auto 0 10px;padding:12px 18px;border-radius:14px;background:var(--blue);color:#fff;font-weight:600;font-size:15px;text-decoration:none;box-shadow:0 1px 1px rgba(0,0,0,.06),0 8px 18px -8px var(--blue);transition:background .2s,transform .15s}
+a.btn svg{width:16px;height:16px;fill:currentColor}
+a.btn:hover{background:var(--blue2)}
+a.btn:active{transform:scale(.97)}
+a:focus-visible,label:focus-visible,textarea:focus-visible{outline:none;box-shadow:0 0 0 4px var(--ring)}
+code,textarea{font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace}
+code{direction:ltr;unicode-bidi:isolate;font-size:.86em;padding:2px 7px;border-radius:7px;background:var(--fill)}
+textarea{display:block;width:100%;height:80px;scrollbar-width:none;margin:0;padding:10px 12px;border:0;border-radius:12px;background:var(--fill);color:var(--text);font-size:12px;line-height:1.55;resize:none;outline:none;direction:ltr;text-align:left;word-break:break-all;transition:background .2s,box-shadow .2s}
+textarea:hover{background:var(--fill2)}
+textarea::-webkit-scrollbar{display:none}
+textarea.one{height:42px;white-space:pre;overflow-x:auto;overflow-y:hidden;word-break:normal;padding-top:11px}
+.field-label{display:block;font-size:12.5px;font-weight:600;color:var(--muted);margin:16px 0 6px}
+.rows{margin:10px 0 0}
+.row{display:grid;grid-template-columns:120px 1fr;align-items:center;gap:14px;padding:10px 0;border-top:.5px solid var(--sep)}
+.row:first-child{border-top:0}
+.row b{font-size:14px;font-weight:600;white-space:nowrap}
+.row b small{font-weight:500;color:var(--muted);font-size:12px;margin-inline-start:4px}
+a.link-row{display:flex;align-items:center;gap:14px;color:inherit;text-decoration:none}
+.icon{flex:none;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(140deg,#34c759,#30b0c7);box-shadow:0 6px 14px -6px rgba(48,176,199,.8)}
+.icon svg{width:20px;height:20px;fill:none;stroke:#fff;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.link-row .t{display:block;font-weight:700;font-size:16px}
+.chev{margin-inline-start:auto;flex:none;width:9px;height:15px;fill:none;stroke:var(--faint);stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;transition:transform .25s}
+a.link-row:hover .chev{transform:translateX(3px)}
+#l-fa:checked~main .chev{transform:scaleX(-1)}
+#l-fa:checked~main a.link-row:hover .chev{transform:scaleX(-1) translateX(3px)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin:14px 0}
+.tile{border-radius:20px;padding:16px 18px;animation:rise .6s cubic-bezier(.2,.8,.2,1) both}
+.tile .k{display:block;font-size:12.5px;font-weight:500;color:var(--muted)}
+.tile .v{display:block;margin-top:6px;font-size:26px;line-height:1.15;font-weight:800;letter-spacing:-.02em;direction:ltr;text-align:start}
+#l-fa:checked~main .tile .v{text-align:right}
+.tile.accent .v{color:var(--blue)}
+.tile.good .v{color:var(--green)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:11px 4px;text-align:start;vertical-align:middle;border-top:.5px solid var(--sep)}
+tr:first-child th,tr:first-child td{border-top:0}
+th{font-weight:500;color:var(--muted);white-space:nowrap;padding-inline-end:18px}
+thead th{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+td.mono,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12.5px;direction:ltr;unicode-bidi:isolate}
+.scroll{overflow-x:auto;margin:0 -4px;padding:0 4px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.ok{background:var(--green-t);color:var(--green)}
+.bad{background:var(--red-t);color:var(--red)}
+a.ghost{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:8px 14px;border-radius:999px;background:var(--fill);color:var(--blue);font-weight:600;font-size:14px;text-decoration:none;transition:background .2s}
+a.ghost:hover{background:var(--fill2)}
+ol.steps{list-style:none;counter-reset:s;padding:0;margin:6px 0 4px}
+ol.steps li{counter-increment:s;position:relative;padding-inline-start:44px;margin:16px 0;min-height:30px}
+ol.steps li::before{content:counter(s);position:absolute;inset-inline-start:0;top:0;width:30px;height:30px;border-radius:50%;background:linear-gradient(140deg,#5ac8fa,#0a84ff);color:#fff;font-weight:700;font-size:14px;line-height:30px;text-align:center;box-shadow:0 6px 14px -6px rgba(10,132,255,.9)}
+#l-fa:checked~main ol.steps li::before{content:counter(s,persian)}
+footer.credit{margin:56px 0 0;text-align:center;font-size:12px;color:var(--faint);direction:ltr}
+footer.credit a{color:inherit}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media (max-width:560px){main{padding:10px 14px 44px}.top{top:8px;margin-bottom:28px}.card{padding:18px;border-radius:20px}.warn{padding-inline-start:54px}.warn::before{inset-inline-start:18px;top:19px}.row{grid-template-columns:1fr;gap:6px}.port-num{font-size:34px}}
+@media (prefers-reduced-motion:reduce){*,*::before{animation:none!important;transition:none!important}}
+.fa{display:none}
+#l-fa:checked~main{direction:rtl}
+#l-fa:checked~main .en{display:none}
+#l-fa:checked~main span.fa{display:inline}
+#l-fa:checked~main div.fa,#l-fa:checked~main p.fa,#l-fa:checked~main ol.fa,#l-fa:checked~main h1.fa,#l-fa:checked~main h2.fa{display:block}
+#l-fa:checked~main :not(code):not(textarea):not(.mono){letter-spacing:0}
+#l-fa:checked~main .eyebrow,#l-fa:checked~main thead th{text-transform:none}
+`;
+
+const ICON_PLANE = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.6 10.9 20.3 3.7c1-.4 1.9.5 1.5 1.5l-7.2 17.7c-.4 1-1.8.9-2.1-.1l-2-6.3-6.3-2c-1-.3-1.1-1.7-.1-2.1z"/></svg>`;
+const ICON_PULSE = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-7 5 14 2.5-7h4"/></svg>`;
+const ICON_CHEVRON = `<svg class="chev" viewBox="0 0 9 15" aria-hidden="true"><path d="M1.5 1.5 7.5 7.5l-6 6"/></svg>`;
 
 // Inline text in both languages; CSS shows one of them (no JavaScript needed).
 function bi(en, fa) {
@@ -1261,12 +1387,16 @@ function bi(en, fa) {
 function bilingualPage(title, lang, body, seal) {
   const fa = lang === "fa";
   const credit = `<footer class="credit">ProxyGosha &middot; ${escapeHtml(seal.name)} &middot; <a href="mailto:${escapeHtml(seal.mail)}">${escapeHtml(seal.mail)}</a></footer>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${title}</title><style>${PAGE_STYLE}</style></head><body>
+  return `<!doctype html><html lang="${fa ? "fa" : "en"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><title>${title}</title><style>${PAGE_STYLE}</style></head><body>
 <input type="radio" name="l" id="l-en" hidden${fa ? "" : " checked"}><input type="radio" name="l" id="l-fa" hidden${fa ? " checked" : ""}>
-<main><nav class="lang"><label for="l-en">English</label> <label for="l-fa">فارسی</label></nav>
+<main><header class="top glass"><div class="brand"><span class="logo">${ICON_PLANE}</span><span>ProxyGosha</span></div><nav class="lang"><label for="l-en">English</label><label for="l-fa">فارسی</label></nav></header>
 ${body}
 ${credit}
 </main></body></html>`;
+}
+
+function hero(eyebrow, title, lead) {
+  return `<section class="hero"><span class="eyebrow">${eyebrow}</span><h1>${title}</h1>${lead ? `<p class="lead">${lead}</p>` : ""}</section>`;
 }
 
 async function servePanel(cfg, host, port, lang) {
@@ -1276,31 +1406,31 @@ async function servePanel(cfg, host, port, lang) {
   const secret = "dd" + bytesToHex(cfg.base);
   const hosts = [];
   for (const h of [host, ...(cfg.extraHosts || [])]) if (h && !hosts.includes(h)) hosts.push(h);
+  const defaultBadge = `<span class="badge">${bi("Default", "پیش‌فرض")}</span>`;
   const sections = hosts.map((h) => {
     const workersDev = h.endsWith(".workers.dev");
     const items = HTTPS_PORTS.map((p) => {
       const pSecret = cfg.portSecrets?.[p]?.secretHex || secret;
       const link = "tg://webproxy?server=" + encodeURIComponent(h) + (p !== 443 ? "&port=" + p : "") + "&secret=" + pSecret;
-      return `<div class="card"><b>${bi("Port", "پورت")} ${p}</b>${p === 443 ? " " + bi("(default)", "(پیش‌فرض)") : ""}<a class="btn" href="${escapeHtml(link)}">${bi("Connect in Telegram", "اتصال در تلگرام")}</a><textarea readonly>${escapeHtml(link)}</textarea></div>`;
+      return `<div class="card glass"><div class="port-head"><span class="eyebrow">${bi("Port", "پورت")}</span>${p === 443 ? defaultBadge : ""}</div><div class="port-num">${p}</div><a class="btn" href="${escapeHtml(link)}">${ICON_PLANE}${bi("Connect in Telegram", "اتصال در تلگرام")}</a><textarea readonly aria-label="Telegram link, port ${p}">${escapeHtml(link)}</textarea></div>`;
     }).join("");
     const note = workersDev
-      ? `<p class="muted">${bi(
+      ? `<div class="card warn">${bi(
           "workers.dev addresses are often filtered in Iran, and some ports may not open on them. Attach a custom domain to this Worker for the best results.",
           "آدرس workers.dev معمولاً در ایران فیلتر است و ممکن است بعضی پورت‌ها رویش باز نباشند. بهتر است یک دامنه شخصی (Custom Domain) به ورکر وصل کنید."
-        )}</p>`
+        )}</div>`
       : "";
     const manualItems = HTTPS_PORTS.map((p) => {
       const s = cfg.portSecrets?.[p]?.secretHex || secret;
-      return `<div style="margin:6px 0"><b>${bi("Port", "پورت")} ${p}</b>${p === 443 ? " " + bi("(default)", "(پیش‌فرض)") : ""}:<textarea class="one" readonly>${escapeHtml(s)}</textarea></div>`;
+      return `<div class="row"><b>${bi("Port", "پورت")} ${p}${p === 443 ? `<small>${bi("default", "پیش‌فرض")}</small>` : ""}</b><textarea class="one" readonly aria-label="Secret, port ${p}">${escapeHtml(s)}</textarea></div>`;
     }).join("");
-    const manual = `<div class="card"><b>${bi("Manual entry", "ورود دستی")}</b> — ${bi(
-        "in Telegram's proxy settings, add a new proxy of type <b>WEB</b>. Each port has its own unique secret:",
-        "در تنظیمات پروکسی تلگرام یک پروکسی جدید از نوع <b>WEB</b> اضافه کنید. هر پورت سکرت اختصاصی خود را دارد:"
-      )}<br>
-${bi("Server", "سرور")}:<textarea class="one" readonly>${escapeHtml(h)}</textarea>
-<div style="margin-top:8px"><b>${bi("Ports &amp; Secrets", "پورت‌ها و سکرت‌ها")}:</b></div>
-${manualItems}</div>`;
-    return `<h2>${escapeHtml(h)}</h2>${note}${manual}${items}`;
+    const manual = `<div class="card glass"><span class="card-title">${bi("Manual entry", "ورود دستی")}</span><p class="muted">${bi(
+        "In Telegram's proxy settings, add a new proxy of type <b>WEB</b>. Each port has its own unique secret.",
+        "در تنظیمات پروکسی تلگرام یک پروکسی جدید از نوع <b>WEB</b> اضافه کنید. هر پورت سکرت اختصاصی خود را دارد."
+      )}</p>
+<span class="field-label">${bi("Server", "سرور")}</span><textarea class="one" readonly aria-label="Server">${escapeHtml(h)}</textarea>
+<span class="field-label">${bi("Ports &amp; secrets", "پورت‌ها و سکرت‌ها")}</span><div class="rows">${manualItems}</div></div>`;
+    return `<h2><span class="dot"></span>${escapeHtml(h)}</h2><p class="sub">${bi("Six ready-made links, one per Cloudflare HTTPS port.", "شش لینک آماده، یکی برای هر پورت HTTPS کلودفلر.")}</p>${note}<div class="ports">${items}</div>${manual}`;
   }).join("");
   const derivedNote = cfg.secretDerived
     ? `<div class="card warn">${bi(
@@ -1308,16 +1438,15 @@ ${manualItems}</div>`;
         "سکرت‌های پروکسی از ADMIN_KEY ساخته شده‌اند. اگر ADMIN_KEY را عوض کنید، سکرت‌ها هم عوض می‌شوند و همه لینک‌هایی که فرستاده‌اید از کار می‌افتند. برای جلوگیری، یک متغیر SECRET ثابت هم تنظیم کنید."
       )}</div>`
     : "";
-  const body = `<h1>${bi("Proxy panel", "پنل پروکسی")}</h1>
-<div class="card">${bi(
+  const body = `${hero(bi("Proxy panel", "پنل پروکسی"), bi("Connect in one tap.", "با یک لمس وصل شوید."), bi(
     "Tap <b>Connect in Telegram</b> to add the proxy. Each port has its own secret. If a port does not connect, try another one. You can add several ports at once and switch between them in Telegram.",
     "روی «اتصال در تلگرام» بزنید تا پروکسی اضافه شود. هر پورت سکرت اختصاصی خود را دارد. اگر یک پورت وصل نشد، پورت دیگری را امتحان کنید. می‌توانید چند پورت را با هم اضافه کنید و در تلگرام بینشان جابه‌جا شوید."
-  )}</div>
+  ))}
 <div class="card warn">${bi(
     "Do not share this page. Share only the links, or the server, port and matching secret.",
     "این صفحه را با کسی به اشتراک نگذارید. فقط لینک‌ها یا سرور، پورت و سکرت مربوطه را بفرستید."
   )}</div>
-<div class="card"><a class="plain" href="${escapeHtml(statusHref)}">${bi("Status &amp; logs", "وضعیت و لاگ‌ها")}</a> <span class="muted">${bi("— live statistics, recent events and a Telegram DC reachability probe.", "— آمار زنده، رویدادهای اخیر و تست دسترسی به دیتاسنترهای تلگرام.")}</span></div>
+<div class="card glass"><a class="link-row" href="${escapeHtml(statusHref)}"><span class="icon">${ICON_PULSE}</span><span><span class="t">${bi("Status &amp; logs", "وضعیت و لاگ‌ها")}</span><span class="muted">${bi("Live statistics, recent events and a Telegram DC reachability probe.", "آمار زنده، رویدادهای اخیر و تست دسترسی به دیتاسنترهای تلگرام.")}</span></span>${ICON_CHEVRON}</a></div>
 ${derivedNote}
 ${sections}`;
   return new Response(bilingualPage("Panel", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
@@ -1336,22 +1465,25 @@ async function serveSetup(host, env, lang, method) {
         "ADMIN_KEY فعلی کوتاه است. حداقل ۱۶ کاراکتر لازم است."
       )}</div>`
     : "";
-  const body = `<h1>${bi("Proxy setup", "راه‌اندازی پروکسی")}</h1>${problem}
-<div class="card">
-<ol class="en"><li>In the Cloudflare dashboard, open <b>Workers &amp; Pages</b> → this Worker → <b>Settings</b> → <b>Variables and Secrets</b>.</li>
+  const body = `${hero(bi("Setup", "راه‌اندازی"), bi("Four steps to your proxy.", "چهار قدم تا پروکسی شما."), bi(
+    "Add one variable in Cloudflare and your panel with ready Telegram links is live.",
+    "یک متغیر در کلودفلر اضافه کنید تا پنل و لینک‌های آماده‌ی تلگرام فعال شود."
+  ))}${problem}
+<div class="card glass">
+<ol class="steps en"><li>In the Cloudflare dashboard, open <b>Workers &amp; Pages</b> → this Worker → <b>Settings</b> → <b>Variables and Secrets</b>.</li>
 <li>Click <b>Add</b>. Name: <code>ADMIN_KEY</code>. Value: the key below (or any password of 16+ English letters and digits).</li>
 <li>Click <b>Deploy</b>.</li>
 <li>Open the address below to reach your panel with ready Telegram links.</li></ol>
-<ol class="fa"><li>در داشبورد کلودفلر: <b>Workers &amp; Pages</b> ← این ورکر ← <b>Settings</b> ← <b>Variables and Secrets</b></li>
+<ol class="steps fa"><li>در داشبورد کلودفلر: <b>Workers &amp; Pages</b> ← این ورکر ← <b>Settings</b> ← <b>Variables and Secrets</b></li>
 <li>روی <b>Add</b> بزنید. نام: <code>ADMIN_KEY</code> ، مقدار: رمز زیر (یا هر رمز ۱۶+ حرفی از حروف و اعداد انگلیسی)</li>
 <li><b>Deploy</b> را بزنید.</li>
 <li>آدرس زیر را باز کنید تا پنل و لینک‌های آماده تلگرام را ببینید.</li></ol>
-${bi("Suggested key", "رمز پیشنهادی")}:<textarea class="one" readonly>${escapeHtml(suggested)}</textarea>
-${bi("Panel address", "آدرس پنل")}:<textarea class="one" readonly>https://${escapeHtml(host)}/${escapeHtml(suggested)}</textarea></div>
-<p class="muted">${bi(
+<span class="field-label">${bi("Suggested key", "رمز پیشنهادی")}</span><textarea class="one" readonly aria-label="Suggested key">${escapeHtml(suggested)}</textarea>
+<span class="field-label">${bi("Panel address", "آدرس پنل")}</span><textarea class="one" readonly aria-label="Panel address">https://${escapeHtml(host)}/${escapeHtml(suggested)}</textarea></div>
+<div class="card warn">${bi(
     "Keep this key private. Anyone who has it can open your panel. If you reload this page, a new key is suggested; use the one you actually saved in Cloudflare.",
     "این رمز را جایی امن نگه دارید. هر کس آن را داشته باشد به پنل دسترسی دارد. با رفرش صفحه رمز جدیدی پیشنهاد می‌شود؛ همان رمزی را استفاده کنید که در کلودفلر ذخیره کرده‌اید."
-  )}</p>`;
+  )}</div>`;
   return new Response(bilingualPage("Setup", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
 }
 
@@ -1412,37 +1544,38 @@ async function serveStatus(cfg, host, lang, wantsProbe) {
     ? bi("derived from ADMIN_KEY", "مشتق‌شده از ADMIN_KEY")
     : (cfg.base ? bi("fixed SECRET", "SECRET ثابت") : "-");
   const infoRows = [
-    [bi("Version", "نسخه"), escapeHtml(VERSION)],
-    [bi("Carrier", "حامل"), escapeHtml(cfg.carrier)],
+    [bi("Version", "نسخه"), `<span class="mono">${escapeHtml(VERSION)}</span>`],
+    [bi("Carrier", "حامل"), `<span class="mono">${escapeHtml(cfg.carrier)}</span>`],
     [bi("Upstream", "مسیر به تلگرام"), cfg.upstream === "tcp" ? bi("raw TCP only", "فقط TCP مستقیم") : bi("kws WebSocket, TCP fallback", "WebSocket رسمی (kws)، با پشتیبان TCP")],
     [bi("Secret mode", "حالت سکرت"), secretMode],
     [bi("Max streams per session", "حداکثر استریم در هر نشست"), String(cfg.maxStreams)],
     [bi("AD_TAG", "AD_TAG"), cfg.adTag ? bi("set (ignored in Direct-DC mode)", "تنظیم شده (در حالت Direct-DC بی‌اثر)") : bi("not set", "تنظیم نشده")]
   ].map((row) => `<tr><th>${row[0]}</th><td>${row[1]}</td></tr>`).join("");
-  const statsRows = [
-    [bi("Proxy sessions", "نشست‌های پروکسی"), String(STATS.sessions)],
-    [bi("Active sessions (isolate)", "نشست‌های فعال (این ایزوله)"), String(STATS.sessionsActive)],
-    [bi("Streams opened", "استریم‌های باز شده"), String(STATS.streams)],
-    [bi("DC connects ok / failed", "اتصال‌های DC موفق / ناموفق"), (STATS.dcAttempts - STATS.dcFails) + " / " + STATS.dcFails],
-    [bi("kws connects ok / failed", "اتصال‌های kws موفق / ناموفق"), (STATS.kwsAttempts - STATS.kwsFails) + " / " + STATS.kwsFails],
-    [bi("Traffic up / down", "ترافیک بالا / پایین"), fmtBytes(STATS.bytesUp) + " / " + fmtBytes(STATS.bytesDown)],
-    [bi("Rejected WS tokens", "توکن‌های WebSocket ردشده"), String(STATS.wsRejects)],
-    [bi("Isolate uptime", "مدت فعالیت این ایزوله"), fmtDuration(Date.now() - ISOLATE_START)]
-  ].map((row) => `<tr><th>${row[0]}</th><td>${escapeHtml(row[1])}</td></tr>`).join("");
+  const tiles = [
+    [bi("Active sessions", "نشست‌های فعال"), String(STATS.sessionsActive), "accent"],
+    [bi("Proxy sessions", "نشست‌های پروکسی"), String(STATS.sessions), ""],
+    [bi("Streams opened", "استریم‌های باز شده"), String(STATS.streams), ""],
+    [bi("Traffic up / down", "ترافیک بالا / پایین"), fmtBytes(STATS.bytesUp) + " / " + fmtBytes(STATS.bytesDown), ""],
+    [bi("kws connects ok / failed", "اتصال‌های kws موفق / ناموفق"), (STATS.kwsAttempts - STATS.kwsFails) + " / " + STATS.kwsFails, ""],
+    [bi("DC connects ok / failed", "اتصال‌های DC موفق / ناموفق"), (STATS.dcAttempts - STATS.dcFails) + " / " + STATS.dcFails, ""],
+    [bi("Rejected WS tokens", "توکن‌های WebSocket ردشده"), String(STATS.wsRejects), ""],
+    [bi("Isolate uptime", "مدت فعالیت این ایزوله"), fmtDuration(Date.now() - ISOLATE_START), "good"]
+  ].map(([k, v, tone]) => `<div class="tile glass${tone ? " " + tone : ""}"><span class="k">${k}</span><span class="v">${escapeHtml(v)}</span></div>`).join("");
   const probeBlock = probe
-    ? `<div class="card"><b>${bi("DC reachability probe", "تست دسترسی به دیتاسنترها")}</b><table><tr><th>DC</th><th>IP</th><th>${bi("Result", "نتیجه")}</th></tr>${probe.map((r) => `<tr><td>DC${r.dc}</td><td>${escapeHtml(r.ip)}</td><td class="${r.ok ? "ok" : "bad"}">${r.ok ? "OK" : "FAIL"} (${r.ms} ms)</td></tr>`).join("")}</table></div>`
-    : `<div class="card"><a class="plain" href="?probe=1">${bi("Run DC reachability probe", "اجرای تست دسترسی به دیتاسنترهای تلگرام")}</a><p class="muted">${bi("Opens and immediately closes one TCP socket per DC from this Cloudflare location.", "برای هر دیتاسنتر یک اتصال TCP از همین لوکیشن کلودفلر باز و بلافاصله بسته می‌شود.")}</p></div>`;
-  const logRows = LOG.slice(-60).reverse().map((e) => `<tr><td>${new Date(e.t).toISOString().slice(11, 19)}</td><td>${escapeHtml(e.event)}</td><td>${escapeHtml(e.detail)}</td></tr>`).join("");
-  const logsBlock = `<div class="card"><b>${bi("Recent events", "رویدادهای اخیر")}</b> <span class="muted">${bi("(newest first, isolate memory only)", "(جدیدترین اول، فقط حافظه همین ایزوله)")}</span><table><tr><th>UTC</th><th>event</th><th>detail</th></tr>${logRows || `<tr><td colspan="3">-</td></tr>`}</table></div>`;
-  const body = `<h1>${bi("Proxy status", "وضعیت پروکسی")}</h1>
-<div class="card muted">${bi(
+    ? `<div class="card glass"><span class="card-title">${bi("DC reachability probe", "تست دسترسی به دیتاسنترها")}</span><div class="scroll"><table><thead><tr><th>DC</th><th>IP</th><th>${bi("Result", "نتیجه")}</th></tr></thead><tbody>${probe.map((r) => `<tr><td><b>DC${r.dc}</b></td><td class="mono">${escapeHtml(r.ip)}</td><td><span class="pill ${r.ok ? "ok" : "bad"}">${r.ok ? "OK" : "FAIL"} · ${r.ms} ms</span></td></tr>`).join("")}</tbody></table></div><a class="ghost" href="?probe=1">${bi("Run again", "اجرای دوباره")}</a></div>`
+    : `<div class="card glass"><span class="card-title">${bi("DC reachability probe", "تست دسترسی به دیتاسنترها")}</span><p class="muted">${bi("Opens and immediately closes one TCP socket per DC from this Cloudflare location.", "برای هر دیتاسنتر یک اتصال TCP از همین لوکیشن کلودفلر باز و بلافاصله بسته می‌شود.")}</p><a class="ghost" href="?probe=1">${bi("Run probe", "اجرای تست")}</a></div>`;
+  const logRows = LOG.slice(-60).reverse().map((e) => `<tr><td class="mono">${new Date(e.t).toISOString().slice(11, 19)}</td><td><b>${escapeHtml(e.event)}</b></td><td class="mono">${escapeHtml(e.detail)}</td></tr>`).join("");
+  const logsBlock = `<div class="card glass"><span class="card-title">${bi("Recent events", "رویدادهای اخیر")}</span><p class="muted">${bi("Newest first, kept in this isolate's memory only.", "جدیدترین اول، فقط در حافظه‌ی همین ایزوله.")}</p><div class="scroll"><table><thead><tr><th>UTC</th><th>${bi("Event", "رویداد")}</th><th>${bi("Detail", "جزئیات")}</th></tr></thead><tbody>${logRows || `<tr><td colspan="3" class="muted">-</td></tr>`}</tbody></table></div></div>`;
+  const panelHref = "/" + encodeURIComponent(cfg.adminKey);
+  const body = `${hero(bi("Status", "وضعیت"), bi("Everything, at a glance.", "همه‌چیز در یک نگاه."), bi(
     "Counters and logs are kept in this Cloudflare isolate only, reset when it is recycled, and are not shared between regions. No client IP addresses, tokens or secrets are recorded.",
     "شمارنده‌ها و لاگ‌ها فقط در حافظه همین ایزوله کلودفلر نگهداری می‌شوند، با بازیافت ایزوله صفر می‌شوند و بین منطقه‌ها مشترک نیستند. هیچ IP، توکن یا سکرتی ثبت نمی‌شود."
-  )}</div>
-<div class="card"><b>${bi("Configuration", "پیکربندی")}</b><table>${infoRows}</table></div>
-<div class="card"><b>${bi("Live statistics", "آمار زنده")}</b><table>${statsRows}</table></div>
+  ))}
+<div class="tiles">${tiles}</div>
+<div class="card glass"><span class="card-title">${bi("Configuration", "پیکربندی")}</span><table>${infoRows}</table></div>
 ${probeBlock}
-${logsBlock}`;
+${logsBlock}
+<a class="ghost" href="${escapeHtml(panelHref)}">${bi("Back to panel", "بازگشت به پنل")}</a>`;
   return new Response(bilingualPage("Status", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
 }
 
