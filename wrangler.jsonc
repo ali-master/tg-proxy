@@ -6,5 +6,6 @@
   "main": "worker.js",
   "compatibility_date": "2026-11-12",
   "workers_dev": true,
-  "observability": { "enabled": false }
+  // Workers Logs: per-stream [tgproxy] lines across all isolates (dashboard → Logs).
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
 }

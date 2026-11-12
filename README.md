@@ -47,6 +47,7 @@ Share only the links, never the panel address. Live stats and a Telegram DC prob
 - Attach another domain and add it to `EXTRA_HOSTS`.
 - Desktop: map your domain to a working Cloudflare IP in your `hosts` file.
 - Russia: turn off **ECH** under **SSL/TLS → Edge Certificates**.
+- See what happens: Cloudflare → your Worker → **Logs**. Each `[tgproxy] stream_end` line shows the DC, the path (TCP or kws), connect time, bytes and why the connection closed. If you pasted the code by hand, first turn on **Settings → Observability → Workers Logs**.
 
 Step-by-step guides with screenshots and FAQ: [فارسی](docs/README.fa.md) · [Русский](docs/README.ru.md) · [简体中文](docs/README.zh.md) · [Video](https://youtu.be/7StSCQdpqvk)
 

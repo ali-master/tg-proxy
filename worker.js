@@ -164,7 +164,8 @@ const REQUEST_LIMIT = 16777216;
 // status page so the operator can answer "is the proxy actually working?".
 // Counters reset whenever Cloudflare recycles the isolate. No client IPs,
 // tokens or secrets are ever recorded.
-const ISOLATE_START = Date.now();
+// Set on the first request: at global scope Workers report Date.now() as 0.
+let ISOLATE_START = 0;
 const STATS = {
   sessions: 0,        // WebSocket proxy sessions created in this isolate
   sessionsActive: 0,  // currently open in this isolate
@@ -185,12 +186,21 @@ const DC_FAILED_AT = new Map();
 const DC_FAIL_TTL = 60000;
 // Largest MTProto transport packet accepted on the kws uplink (same bound as Telegram Web).
 const KWS_MAX_PACKET = 8388608;
+// Connect race: the second upstream path starts after this delay (or when the first fails).
+const UPSTREAM_STAGGER = 1500;
+const KWS_TIMEOUT = 5000;
+// TCP downlink stops reading while this many bytes wait for client credit.
+const DOWN_HIGH_WATER = 1048576;
 const LOG = [];
 const LOG_LIMIT = 120;
-function logEvent(event, detail) {
+// persist=true also writes the event to Workers Logs (console), the only view that
+// spans every isolate; the status page only sees the isolate that serves it.
+function logEvent(event, detail, persist) {
   try {
-    LOG.push({ t: Date.now(), event: String(event).slice(0, 24), detail: String(detail || "").slice(0, 120) });
+    const entry = { t: Date.now(), event: String(event).slice(0, 24), detail: String(detail || "").slice(0, 240) };
+    LOG.push(entry);
     if (LOG.length > LOG_LIMIT) LOG.splice(0, LOG.length - LOG_LIMIT);
+    if (persist) console.log(`[tgproxy] ${entry.event} ${entry.detail}`);
   } catch (_) {}
 }
 
@@ -1384,10 +1394,10 @@ function bi(en, fa) {
 }
 
 // English is the default; ?lang=fa pre-selects Persian. Switching needs no reload.
-function bilingualPage(title, lang, body, seal) {
+function bilingualPage(title, lang, body, seal, refreshSeconds) {
   const fa = lang === "fa";
   const credit = `<footer class="credit">ProxyGosha &middot; ${escapeHtml(seal.name)} &middot; <a href="mailto:${escapeHtml(seal.mail)}">${escapeHtml(seal.mail)}</a></footer>`;
-  return `<!doctype html><html lang="${fa ? "fa" : "en"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><title>${title}</title><style>${PAGE_STYLE}</style></head><body>
+  return `<!doctype html><html lang="${fa ? "fa" : "en"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex">${refreshSeconds ? `<meta http-equiv="refresh" content="${refreshSeconds}">` : ""}<meta name="color-scheme" content="light dark"><meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><title>${title}</title><style>${PAGE_STYLE}</style></head><body>
 <input type="radio" name="l" id="l-en" hidden${fa ? "" : " checked"}><input type="radio" name="l" id="l-fa" hidden${fa ? " checked" : ""}>
 <main><header class="top glass"><div class="brand"><span class="logo">${ICON_PLANE}</span><span>ProxyGosha</span></div><nav class="lang"><label for="l-en">English</label><label for="l-fa">فارسی</label></nav></header>
 ${body}
@@ -1568,15 +1578,15 @@ async function serveStatus(cfg, host, lang, wantsProbe) {
   const logsBlock = `<div class="card glass"><span class="card-title">${bi("Recent events", "رویدادهای اخیر")}</span><p class="muted">${bi("Newest first, kept in this isolate's memory only.", "جدیدترین اول، فقط در حافظه‌ی همین ایزوله.")}</p><div class="scroll"><table><thead><tr><th>UTC</th><th>${bi("Event", "رویداد")}</th><th>${bi("Detail", "جزئیات")}</th></tr></thead><tbody>${logRows || `<tr><td colspan="3" class="muted">-</td></tr>`}</tbody></table></div></div>`;
   const panelHref = "/" + encodeURIComponent(cfg.adminKey);
   const body = `${hero(bi("Status", "وضعیت"), bi("Everything, at a glance.", "همه‌چیز در یک نگاه."), bi(
-    "Counters and logs are kept in this Cloudflare isolate only, reset when it is recycled, and are not shared between regions. No client IP addresses, tokens or secrets are recorded.",
-    "شمارنده‌ها و لاگ‌ها فقط در حافظه همین ایزوله کلودفلر نگهداری می‌شوند، با بازیافت ایزوله صفر می‌شوند و بین منطقه‌ها مشترک نیستند. هیچ IP، توکن یا سکرتی ثبت نمی‌شود."
+    "This page refreshes every 10 seconds, but it only sees the one Cloudflare isolate that served it; Telegram's connections are spread over many. For every connection, open Cloudflare → your Worker → <b>Logs</b> (lines start with <code>[tgproxy]</code>). No client IP addresses, tokens or secrets are recorded.",
+    "این صفحه هر ۱۰ ثانیه تازه می‌شود، ولی فقط همان ایزوله‌ای از کلودفلر را می‌بیند که صفحه را ساخته؛ اتصال‌های تلگرام بین ایزوله‌های زیادی پخش می‌شوند. برای دیدن همه‌ی اتصال‌ها در کلودفلر ورکر خود را باز کنید و به <b>Logs</b> بروید (خط‌هایی که با <code>[tgproxy]</code> شروع می‌شوند). هیچ IP، توکن یا سکرتی ثبت نمی‌شود."
   ))}
 <div class="tiles">${tiles}</div>
 <div class="card glass"><span class="card-title">${bi("Configuration", "پیکربندی")}</span><table>${infoRows}</table></div>
 ${probeBlock}
 ${logsBlock}
 <a class="ghost" href="${escapeHtml(panelHref)}">${bi("Back to panel", "بازگشت به پنل")}</a>`;
-  return new Response(bilingualPage("Status", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
+  return new Response(bilingualPage("Status", lang, body, await unseal(), wantsProbe ? 0 : 10), { status: 200, headers: pageHeaders() });
 }
 
 async function issueToken(cfg, kind, ttl, mode) {
@@ -1745,12 +1755,18 @@ class Stream {
     this.downQueue = [];     // kws messages waiting for client credit
     this.downQueued = 0;
     this.drainTimer = 0;
+    this.drainResolve = null; // readTcp waits here while the down queue is full
+    this.dcId = 0;
+    this.upstream = "";      // "tcp ip:port" or the kws host that won the connect race
+    this.connectMs = 0;
+    this.openedAt = Date.now();
+    this.bytesUp = 0;
+    this.bytesDown = 0;
     this.inQueue = [];
     this.inRunning = false;
     this.queuedLocal = 0;
     this.recvOutstanding = 0;
     this.sendCredit = session.cfg.streamWindow;
-    this.creditResolve = null;
     this.clientReadKey = null;
     this.clientReadIv = null;
     this.clientWriteKey = null;
@@ -1769,7 +1785,7 @@ class Stream {
     if (this.dead || !payload.length) return;
     this.recvOutstanding += payload.length;
     if (this.recvOutstanding > this.session.cfg.streamWindow + 65536) {
-      this.kill(true);
+      this.kill(true, "client exceeded window");
       return;
     }
     // No copy: payload views the WebSocket message's own ArrayBuffer, which is never reused.
@@ -1777,7 +1793,7 @@ class Stream {
     this.queuedLocal += payload.length;
     this.session.queued += payload.length;
     if (this.session.queued > this.session.cfg.maxQueued) {
-      this.kill(true);
+      this.kill(true, "session queue overflow");
       return;
     }
     this.runIn();
@@ -1813,8 +1829,8 @@ class Stream {
         this.session.queued -= data.length;
         await this.writeToDc(data);
       }
-    } catch (_) {
-      this.kill(true);
+    } catch (error) {
+      this.kill(true, "error " + (error && error.message));
     } finally {
       this.inRunning = false;
       if (!this.dead && this.inQueue.length) this.runIn();
@@ -1833,10 +1849,8 @@ class Stream {
     const dcId = new DataView(tail.buffer, tail.byteOffset + 4, 2).getInt16(0, true);
     const dcKey = Math.abs(dcId);
     const address = this.session.cfg.dc[dcKey];
-    if (!address) throw new Error("bad dc");
-
-    const candidateIps = Array.isArray(address) ? address : [address];
-    const candidatePorts = Array.isArray(this.session.cfg.dcPorts) ? this.session.cfg.dcPorts : [this.session.cfg.dcPort || 443];
+    if (!address) throw new Error("bad dc " + dcId);
+    this.dcId = dcId;
 
     // Middle-End / Ad Tag Routing Check:
     // If AD_TAG is configured, note protocol constraint: native ME handshake requires
@@ -1882,90 +1896,158 @@ class Stream {
     dcHeader.set(encryptedTail, 56);
     if (this.dead) return;
 
-    // Preferred upstream: Telegram's own WebSocket frontends (the ones web.telegram.org
-    // uses). Media connections (negative DC id) go to the dedicated kwsN-1 media hosts.
-    // Raw TCP to the DC IPs below stays as the fallback (and the only path for DC 203).
-    if (this.session.cfg.upstream !== "tcp" && dcKey >= 1 && dcKey <= 5) {
-      const ws = await this.dialKws(dcKey, dcId < 0);
-      if (this.dead) {
-        if (ws) { try { ws.close(1000); } catch (_) {} }
-        return;
-      }
-      if (ws) {
-        this.kws = ws;
-        ws.send(dcHeader);
-        this.phase = "ready";
-        this.drainKws();
-        return;
-      }
+    const started = Date.now();
+    const up = await this.openUpstream(dcKey, dcId);
+    if (!up) {
+      logEvent("dc_fail", `dc=${dcId} no upstream connected`, true);
+      throw new Error("failed to connect to Telegram");
     }
+    if (this.dead) {
+      closeUpstream(up);
+      return;
+    }
+    this.connectMs = Date.now() - started;
+    if (up.ws) {
+      this.upstream = up.name;
+      this.kws = up.ws;
+      up.ws.addEventListener("message", (event) => {
+        if (event.data instanceof ArrayBuffer && event.data.byteLength) this.onDownData(new Uint8Array(event.data));
+      });
+      up.ws.addEventListener("close", (event) => this.kill(true, "kws closed " + (event.code || "")));
+      up.ws.addEventListener("error", () => this.kill(true, "kws error"));
+      up.ws.send(dcHeader);
+      this.phase = "ready";
+      return;
+    }
+    this.upstream = "tcp " + up.addr;
+    this.socket = up.socket;
+    this.writer = up.socket.writable.getWriter();
+    this.reader = up.socket.readable.getReader();
+    await this.writer.write(dcHeader);
+    if (this.dead) return;
+    this.phase = "ready";
+    this.readTcp();
+  }
 
-    // Connect to the DC with bounded failover. Every connect() is a subrequest
-    // (50 per invocation on Free) and occupies one of the 6 "connecting" slots,
-    // so: few attempts, random IP order (spreads load), and always close losers.
-    let socket = null;
-    let lastError = null;
-    const ips = candidateIps.slice();
+  // Connects to Telegram over raw TCP and kws (wss://kwsN.web.telegram.org) in a
+  // staggered race: the preferred path starts first, the other joins after
+  // UPSTREAM_STAGGER ms or as soon as the first fails, and the first to open wins
+  // (the loser is closed). Normal streams prefer TCP (fastest handshake); media
+  // streams (negative DC id) prefer the dedicated kwsN-1 media frontends. A blocked
+  // path therefore costs at most UPSTREAM_STAGGER ms instead of stacked timeouts.
+  openUpstream(dcKey, dcId) {
+    const ctl = { done: false };
+    const kwsAllowed = this.session.cfg.upstream !== "tcp" && dcKey >= 1 && dcKey <= 5;
+    const tcp = () => this.connectTcp(dcKey, ctl);
+    const kws = () => this.dialKws(dcKey, dcId < 0, ctl);
+    const order = !kwsAllowed ? [tcp] : dcId < 0 ? [kws, tcp] : [tcp, kws];
+    return new Promise((resolve) => {
+      let next = 0;
+      let running = 0;
+      let settled = false;
+      let timer = 0;
+      const launch = () => {
+        if (settled || this.dead || next >= order.length) return;
+        const attempt = order[next++];
+        running++;
+        if (next < order.length) timer = setTimeout(launch, UPSTREAM_STAGGER);
+        attempt().catch(() => null).then((result) => {
+          running--;
+          if (result && !settled && !this.dead) {
+            settled = true;
+            ctl.done = true;
+            clearTimeout(timer);
+            resolve(result);
+          } else if (result) {
+            closeUpstream(result);
+          } else if (!settled) {
+            clearTimeout(timer);
+            if (next < order.length && !this.dead) launch();
+            else if (!running) { settled = true; ctl.done = true; resolve(null); }
+          }
+        });
+      };
+      launch();
+    });
+  }
+
+  // Raw TCP to the DC's IPs with bounded failover. Every connect() is a subrequest
+  // (50 per invocation on Free) and occupies one of the 6 "connecting" slots, so:
+  // few attempts, random IP order, recently failed endpoints last, losers closed.
+  async connectTcp(dcKey, ctl) {
+    const address = this.session.cfg.dc[dcKey];
+    const ips = (Array.isArray(address) ? address : [address]).slice();
     for (let i = ips.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [ips[i], ips[j]] = [ips[j], ips[i]];
     }
+    const ports = Array.isArray(this.session.cfg.dcPorts) ? this.session.cfg.dcPorts : [this.session.cfg.dcPort || 443];
     const attempts = [];
-    for (const port of candidatePorts) for (const hostIp of ips) attempts.push([hostIp, port]);
-    // Endpoints that failed recently in this isolate go last (stable sort keeps the shuffle).
+    for (const port of ports) for (const hostIp of ips) attempts.push([hostIp, port]);
     const now = Date.now();
     const recentlyFailed = ([hostIp, port]) => (now - (DC_FAILED_AT.get(hostIp + ":" + port) || 0) < DC_FAIL_TTL ? 1 : 0);
     attempts.sort((x, y) => recentlyFailed(x) - recentlyFailed(y));
-    const maxAttempts = Math.min(attempts.length, 4);
-
-    for (let a = 0; a < maxAttempts && !socket; a++) {
-      if (this.dead) return;
-      const [hostIp, port] = attempts[a];
+    for (const [hostIp, port] of attempts.slice(0, 4)) {
+      if (this.dead || ctl.done) return null;
       STATS.dcAttempts++;
-      let candidateSocket = null;
+      let socket = null;
       let timer = null;
       try {
-        candidateSocket = connect({ hostname: hostIp, port }, { secureTransport: "off" });
-        candidateSocket.closed.catch(() => {});
-        const timeoutPromise = new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error("connect timeout")), 3000);
-        });
-        await Promise.race([candidateSocket.opened, timeoutPromise]);
-        socket = candidateSocket;
+        socket = connect({ hostname: hostIp, port }, { secureTransport: "off" });
+        socket.closed.catch(() => {});
+        await Promise.race([socket.opened, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("connect timeout")), 3000); })]);
         DC_FAILED_AT.delete(hostIp + ":" + port);
-      } catch (connErr) {
-        lastError = connErr;
+        if (this.dead || ctl.done) { socket.close().catch(() => {}); return null; }
+        return { socket, addr: hostIp + ":" + port };
+      } catch (error) {
         STATS.dcFails++;
         DC_FAILED_AT.set(hostIp + ":" + port, Date.now());
-        // Previously a timed-out socket stayed pending and kept a connection slot busy.
-        if (candidateSocket) { try { candidateSocket.close().catch(() => {}); } catch (_) {} }
+        logEvent("tcp_fail", `${hostIp}:${port} ${error && error.message}`, true);
+        if (socket) { try { socket.close().catch(() => {}); } catch (_) {} }
       } finally {
         if (timer) clearTimeout(timer);
       }
     }
+    return null;
+  }
 
-    if (!socket) {
-      logEvent("dc_fail", `dc=${dcKey}`);
-      throw lastError || new Error("failed to connect to DC");
+  // One kws WebSocket: kwsN for normal streams, kwsN-1 (media frontend) for media.
+  // A host that failed in this isolate within DC_FAIL_TTL is skipped outright.
+  async dialKws(dc, media, ctl) {
+    const name = media ? `kws${dc}-1` : `kws${dc}`;
+    if (Date.now() - (DC_FAILED_AT.get(name) || 0) < DC_FAIL_TTL) return null;
+    STATS.kwsAttempts++;
+    let ws = null;
+    let timer = null;
+    try {
+      ws = new WebSocket(`wss://${name}.web.telegram.org/apiws`, "binary");
+      ws.binaryType = "arraybuffer";
+      await new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("timeout")), KWS_TIMEOUT);
+        ws.addEventListener("open", resolve, { once: true });
+        ws.addEventListener("error", () => reject(new Error("error")), { once: true });
+        ws.addEventListener("close", (event) => reject(new Error("closed " + event.code)), { once: true });
+      });
+      if (ws.protocol && ws.protocol !== "binary") throw new Error("protocol " + ws.protocol);
+      DC_FAILED_AT.delete(name);
+      if (this.dead || ctl.done) { ws.close(1000); return null; }
+      return { ws, name };
+    } catch (error) {
+      STATS.kwsFails++;
+      DC_FAILED_AT.set(name, Date.now());
+      logEvent("kws_fail", `${name} ${error && error.message}`, true);
+      if (ws) { try { ws.close(1000); } catch (_) {} }
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-
-    this.socket = socket;
-    if (this.dead) {
-      try { await socket.close(); } catch (_) {}
-      return;
-    }
-    this.writer = socket.writable.getWriter();
-    this.reader = socket.readable.getReader();
-    await this.writer.write(dcHeader);
-    if (this.dead) return;
-    this.phase = "ready";
-    this.pump().catch(() => this.kill(true));
   }
 
   async writeToDc(payload) {
     if (this.dead) return;
     const plain = await ctrAt(this.clientReadKey, this.clientReadIv, this.clientReadPos, payload);
     this.clientReadPos += payload.length;
+    this.bytesUp += payload.length;
     if (this.dead) return;
     if (this.kws) {
       await this.sendKws(plain);
@@ -1978,73 +2060,25 @@ class Stream {
     this.grant(payload.length);
   }
 
-  async pump() {
+  // TCP downlink: read into the shared down queue; pause reading while the queue
+  // is above DOWN_HIGH_WATER (client credit exhausted), which keeps TCP backpressure.
+  async readTcp() {
     const reader = this.reader;
+    let reason = "telegram closed";
     try {
       while (!this.dead) {
-        if (this.sendCredit <= 0) {
-          await this.waitCredit();
+        if (this.downQueued >= DOWN_HIGH_WATER) {
+          await new Promise((resolve) => { this.drainResolve = resolve; });
           continue;
         }
         const result = await reader.read();
         if (result.done) break;
-        const value = result.value;
-        let offset = 0;
-        while (offset < value.length && !this.dead) {
-          if (this.sendCredit <= 0) {
-            await this.waitCredit();
-            continue;
-          }
-          const size = Math.min(value.length - offset, this.sendCredit, this.session.cfg.dataChunk);
-          if (size <= 0) continue;
-          // Fast mode: bytes from the DC are already encrypted for the client.
-          const chunk = value.subarray(offset, offset + size);
-          this.sendCredit -= size;
-          this.session.sendFrame(frame(0x02, this.id, chunk));
-          offset += size;
-        }
+        if (result.value && result.value.length) this.onDownData(result.value);
       }
-    } catch (_) {}
-    this.kill(true);
-  }
-
-  // Opens wss://kwsN[-1].web.telegram.org/apiws. Media streams try the -1 media host
-  // first. Hosts that failed in the last minute are skipped, so a blocked kws costs
-  // at most one timeout per isolate per minute before falling back to raw TCP.
-  async dialKws(dc, media) {
-    const names = media ? [`kws${dc}-1`, `kws${dc}`] : [`kws${dc}`, `kws${dc}-1`];
-    const now = Date.now();
-    for (const name of names) {
-      if (this.dead) return null;
-      if (now - (DC_FAILED_AT.get(name) || 0) < DC_FAIL_TTL) continue;
-      STATS.kwsAttempts++;
-      let ws = null;
-      let timer = null;
-      try {
-        ws = new WebSocket(`wss://${name}.web.telegram.org/apiws`, "binary");
-        ws.binaryType = "arraybuffer";
-        await new Promise((resolve, reject) => {
-          timer = setTimeout(() => reject(new Error("kws timeout")), 4000);
-          ws.addEventListener("open", resolve, { once: true });
-          ws.addEventListener("error", reject, { once: true });
-          ws.addEventListener("close", reject, { once: true });
-        });
-        if (ws.protocol && ws.protocol !== "binary") throw new Error("kws protocol");
-        ws.addEventListener("message", (event) => this.onKwsData(event.data));
-        ws.addEventListener("close", () => this.kill(true));
-        ws.addEventListener("error", () => this.kill(true));
-        DC_FAILED_AT.delete(name);
-        return ws;
-      } catch (_) {
-        STATS.kwsFails++;
-        DC_FAILED_AT.set(name, Date.now());
-        logEvent("kws_fail", name);
-        if (ws) { try { ws.close(1000); } catch (_) {} }
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+    } catch (error) {
+      reason = "tcp read " + (error && error.message);
     }
-    return null;
+    this.kill(true, reason);
   }
 
   // Uplink to kws: one WebSocket message per complete MTProto transport packet
@@ -2090,23 +2124,23 @@ class Stream {
     }
   }
 
-  onKwsData(data) {
-    if (this.dead || !(data instanceof ArrayBuffer) || !data.byteLength) return;
-    this.downQueue.push(new Uint8Array(data));
-    this.downQueued += data.byteLength;
+  // Downlink from either upstream. Fast mode: bytes from Telegram are already
+  // encrypted for the client, so they are only framed. Small reads/messages are
+  // coalesced for up to 1 ms into fewer, larger DATA frames (less CPU per byte).
+  onDownData(bytes) {
+    if (this.dead) return;
+    this.downQueue.push(bytes);
+    this.downQueued += bytes.length;
+    this.bytesDown += bytes.length;
     if (this.downQueued > this.session.cfg.maxQueued) {
-      this.kill(true);
+      this.kill(true, "down queue overflow");
       return;
     }
-    // kws often delivers many small messages; waiting 1 ms coalesces them into
-    // fewer, larger DATA frames (fewer ws.send calls = less CPU per byte).
-    if (this.downQueued >= this.session.cfg.dataChunk) this.drainKws();
-    else if (!this.drainTimer) this.drainTimer = setTimeout(() => { this.drainTimer = 0; this.drainKws(); }, 1);
+    if (this.downQueued >= this.session.cfg.dataChunk) this.drainDown();
+    else if (!this.drainTimer) this.drainTimer = setTimeout(() => { this.drainTimer = 0; this.drainDown(); }, 1);
   }
 
-  // Downlink from kws: fast mode bytes need no crypto; copy them straight into
-  // DATA frames of at most dataChunk bytes, limited by the client's credit.
-  drainKws() {
+  drainDown() {
     while (!this.dead && this.sendCredit > 0 && this.downQueued > 0) {
       const size = Math.min(this.downQueued, this.sendCredit, this.session.cfg.dataChunk);
       const out = new Uint8Array(8 + size);
@@ -2128,24 +2162,17 @@ class Stream {
       this.sendCredit -= size;
       this.session.sendFrame(out);
     }
-  }
-
-  waitCredit() {
-    if (this.dead || this.sendCredit > 0) return Promise.resolve();
-    return new Promise((resolve) => {
-      this.creditResolve = resolve;
-    });
+    if (this.drainResolve && this.downQueued < DOWN_HIGH_WATER) {
+      const resolve = this.drainResolve;
+      this.drainResolve = null;
+      resolve();
+    }
   }
 
   addCredit(amount) {
     if (this.dead) return;
     this.sendCredit = Math.min(0xffffffff, this.sendCredit + amount);
-    if (this.kws) this.drainKws();
-    if (this.creditResolve) {
-      const resolve = this.creditResolve;
-      this.creditResolve = null;
-      resolve();
-    }
+    this.drainDown();
   }
 
   grant(amount) {
@@ -2154,18 +2181,20 @@ class Stream {
     this.session.sendFrame(windowFrame(this.id, amount));
   }
 
-  kill(notify) {
+  kill(notify, reason) {
     if (this.dead) return;
     this.dead = true;
+    // One summary line per stream: this is what Workers Logs shows across isolates.
+    logEvent("stream_end", `dc=${this.dcId} via=${this.upstream || "-"} connect=${this.connectMs}ms life=${fmtDuration(Date.now() - this.openedAt)} up=${fmtBytes(this.bytesUp)} down=${fmtBytes(this.bytesDown)} why=${reason || (notify ? "error" : "client closed")}`, true);
     this.session.streams.delete(this.id);
     this.session.remember(this.id);
     this.session.queued -= this.queuedLocal;
     if (this.session.queued < 0) this.session.queued = 0;
     this.queuedLocal = 0;
     this.inQueue.length = 0;
-    if (this.creditResolve) {
-      const resolve = this.creditResolve;
-      this.creditResolve = null;
+    if (this.drainResolve) {
+      const resolve = this.drainResolve;
+      this.drainResolve = null;
       resolve();
     }
     // Free stream locks immediately to prevent socket exhaustion and resource leaks in Cloudflare Workers
@@ -2193,6 +2222,13 @@ class Stream {
     if (notify && !this.session.closed) this.session.sendFrame(frame(0x03, this.id, EMPTY));
     this.session.onStreamClosed(this.id);
   }
+}
+
+function closeUpstream(up) {
+  try {
+    if (up.ws) up.ws.close(1000);
+    else if (up.socket) up.socket.close().catch(() => {});
+  } catch (_) {}
 }
 
 class WsSession {
@@ -2382,7 +2418,7 @@ class WsSession {
       clearInterval(this.keepAliveTimer);
       this.keepAliveTimer = null;
     }
-    for (const stream of Array.from(this.streams.values())) stream.kill(false);
+    for (const stream of Array.from(this.streams.values())) stream.kill(false, "session closed");
     this.streams.clear();
     this.tombstones.clear();
     this.tombstoneOrder.length = 0;
@@ -2390,7 +2426,7 @@ class WsSession {
   }
 
   shutdown(reason) {
-    logEvent("session_kill", reason || "protocol");
+    logEvent("session_kill", reason || "protocol", true);
     this.dispose();
     try {
       if (this.ws.readyState === 1) this.ws.close(1011, "closed");
@@ -2502,6 +2538,7 @@ async function serveWebSocket(request, cfg, host, port) {
 
 export default {
   async fetch(request, env, ctx) {
+    if (!ISOLATE_START) ISOLATE_START = Date.now();
     try {
       const url = new URL(request.url);
       const host = requestHost(request, url);
