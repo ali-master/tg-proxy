@@ -1007,17 +1007,23 @@ function resolveConfig(env) {
 
 let cachedRuntime = null;
 let cachedKey = null;
+let cachedEnv = null;
 
 async function getRuntime(env) {
+  // Fast path: workerd usually hands every request in an isolate the same env
+  // object, so skip re-parsing variables and rebuilding the cache key.
+  if (cachedRuntime && env && env === cachedEnv) return cachedRuntime;
   const resolved = resolveConfig(env);
   const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.generatorEnabled}:${resolved.adminKey}:${resolved.extraHosts.join(",")}`;
   if (cachedRuntime && cachedKey === cacheKey) {
+    cachedEnv = env;
     return cachedRuntime;
   }
   const runtime = await buildRuntime(resolved);
   if (runtime) {
     cachedRuntime = runtime;
     cachedKey = cacheKey;
+    cachedEnv = env;
   }
   return runtime;
 }
