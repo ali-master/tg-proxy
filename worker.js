@@ -191,6 +191,10 @@ const STATS = {
   panelViews: 0,
   statusViews: 0
 };
+// DC endpoints ("ip:port") that recently failed to connect, so new streams try
+// them last. Bounded by the fixed DC list; per isolate, best effort.
+const DC_FAILED_AT = new Map();
+const DC_FAIL_TTL = 60000;
 const LOG = [];
 const LOG_LIMIT = 120;
 function logEvent(event, detail) {
@@ -1812,6 +1816,10 @@ class Stream {
     }
     const attempts = [];
     for (const port of candidatePorts) for (const hostIp of ips) attempts.push([hostIp, port]);
+    // Endpoints that failed recently in this isolate go last (stable sort keeps the shuffle).
+    const now = Date.now();
+    const recentlyFailed = ([hostIp, port]) => (now - (DC_FAILED_AT.get(hostIp + ":" + port) || 0) < DC_FAIL_TTL ? 1 : 0);
+    attempts.sort((x, y) => recentlyFailed(x) - recentlyFailed(y));
     const maxAttempts = Math.min(attempts.length, 4);
 
     for (let a = 0; a < maxAttempts && !socket; a++) {
@@ -1828,9 +1836,11 @@ class Stream {
         });
         await Promise.race([candidateSocket.opened, timeoutPromise]);
         socket = candidateSocket;
+        DC_FAILED_AT.delete(hostIp + ":" + port);
       } catch (connErr) {
         lastError = connErr;
         STATS.dcFails++;
+        DC_FAILED_AT.set(hostIp + ":" + port, Date.now());
         // Previously a timed-out socket stayed pending and kept a connection slot busy.
         if (candidateSocket) { try { candidateSocket.close().catch(() => {}); } catch (_) {} }
       } finally {
