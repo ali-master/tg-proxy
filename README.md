@@ -76,6 +76,22 @@ You need:
 
 ---
 
+## ⚡ One-click deploy
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ali-master/tg-proxy)
+
+1. Click the button and sign in to Cloudflare. Connect your GitHub or GitLab account when asked.
+2. Cloudflare copies this repository into your own account and opens one setup page. Choose a Worker name, and for **`ADMIN_KEY`** enter a random password of at least 16 English letters and digits.
+3. Click **Create and deploy**. Cloudflare builds and deploys the Worker for you. Later changes pushed to your copy are deployed automatically.
+4. Continue with [Step 4 — Connect your domain](#step-4--connect-your-domain) and [Step 5](#step-5--open-your-panel-and-connect) below.
+
+> [!NOTE]
+> The suggested `ADMIN_KEY` value (`CHANGE_ME`) is intentionally too short. If you keep it, the Worker shows its setup page instead of the panel until you set a real key. How the button works: [Deploy to Cloudflare buttons](https://developers.cloudflare.com/workers/platform/deploy-buttons/).
+
+Prefer to do it by hand? Follow the five steps below instead.
+
+---
+
 ## Setup — five steps
 
 ### Step 1 — Create the Worker
@@ -187,6 +203,7 @@ Only `ADMIN_KEY` is required. Everything else is optional.
 | `EXTRA_HOSTS` | Other domains attached to this Worker, separated by commas. The panel generates links for them too. |
 | `DECOY_URL` | A real website to show visitors instead of the built-in store page. Using one makes your proxy harder to tell apart from other deployments. |
 | `CARRIER` | Leave it empty. Set it to `websocket` only if the default mode gives you trouble. |
+| `UPSTREAM` | Leave it empty. By default the Worker reaches Telegram through its official WebSocket servers (`kwsN.web.telegram.org`) and falls back to raw TCP. Set it to `tcp` to use raw TCP to the DC addresses only. |
 
 > [!WARNING]
 > If `SECRET` is not set, changing `ADMIN_KEY` also changes the secrets, and **every link you have shared stops working.**

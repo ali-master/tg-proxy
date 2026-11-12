@@ -1,0 +1,10 @@
+{
+  // Used by the "Deploy to Cloudflare" button and by `npx wrangler deploy`.
+  // Docs: https://developers.cloudflare.com/workers/platform/deploy-buttons/
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tg-proxy",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-12",
+  "workers_dev": true,
+  "observability": { "enabled": false }
+}

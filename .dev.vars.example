@@ -1,0 +1,4 @@
+# The Deploy to Cloudflare button asks for this secret during setup.
+# Replace the placeholder with a random password of 16+ English letters and digits;
+# the placeholder is deliberately too short, so the worker refuses it and shows its setup page.
+ADMIN_KEY=CHANGE_ME
