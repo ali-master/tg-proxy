@@ -16,6 +16,8 @@ import { connect } from "cloudflare:sockets";
  * Any of the 6 ports can also be typed manually in Telegram (server + port +
  * secret); the Worker accepts all of them without extra settings.
  *    SECRET      = fixed 32-hex secret (otherwise derived from ADMIN_KEY).
+ *    UPSTREAM    = "tcp" to skip kwsN.web.telegram.org WebSockets and use raw
+ *                  TCP to the DC IPs only (default: kws first, TCP fallback).
  * =========================================================================
  */
 
@@ -169,6 +171,8 @@ const STATS = {
   streams: 0,         // MTProto streams opened in this isolate
   dcAttempts: 0,      // outbound TCP connects to Telegram DCs
   dcFails: 0,         // failed DC connects
+  kwsAttempts: 0,     // WebSocket connects to kwsN.web.telegram.org
+  kwsFails: 0,        // failed kws connects (stream then falls back to raw TCP)
   bytesUp: 0,         // client -> Telegram bytes (approximate)
   bytesDown: 0,       // Telegram -> client bytes (approximate)
   wsRejects: 0,       // WebSocket handshakes rejected (bad/expired token)
@@ -179,6 +183,8 @@ const STATS = {
 // them last. Bounded by the fixed DC list; per isolate, best effort.
 const DC_FAILED_AT = new Map();
 const DC_FAIL_TTL = 60000;
+// Largest MTProto transport packet accepted on the kws uplink (same bound as Telegram Web).
+const KWS_MAX_PACKET = 8388608;
 const LOG = [];
 const LOG_LIMIT = 120;
 function logEvent(event, detail) {
@@ -877,6 +883,7 @@ function resolveConfig(env) {
     .filter((value) => /^[a-z0-9.-]+$/.test(value) && !value.includes(".."));
   const carrierEnv = (typeof env?.CARRIER === "string" ? env.CARRIER.trim().toLowerCase() : "");
   const carrier = carrierEnv === "websocket" || carrierEnv === "websocket-lanes" ? carrierEnv : CONFIG.carrier;
+  const upstream = (typeof env?.UPSTREAM === "string" && env.UPSTREAM.trim().toLowerCase() === "tcp") ? "tcp" : "kws";
 
   return {
     secretHex,
@@ -896,6 +903,7 @@ function resolveConfig(env) {
     dcPort: CONFIG.dcPort,
     dcPorts: CONFIG.dcPorts,
     carrier,
+    upstream,
     batchBytes: CONFIG.batchBytes,
     bootstrapTtl: CONFIG.bootstrapTtl,
     sessionTtl: CONFIG.sessionTtl,
@@ -914,7 +922,7 @@ async function getRuntime(env) {
   // object, so skip re-parsing variables and rebuilding the cache key.
   if (cachedRuntime && env && env === cachedEnv) return cachedRuntime;
   const resolved = resolveConfig(env);
-  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.generatorEnabled}:${resolved.adminKey}:${resolved.extraHosts.join(",")}`;
+  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.upstream}:${resolved.acceptGenerated}:${resolved.generatorEnabled}:${resolved.adminKey}:${resolved.extraHosts.join(",")}`;
   if (cachedRuntime && cachedKey === cacheKey) {
     cachedEnv = env;
     return cachedRuntime;
@@ -1010,6 +1018,7 @@ async function buildRuntime(cfg) {
     bootstrapTtl: cfg.bootstrapTtl,
     sessionTtl: cfg.sessionTtl,
     carrier: cfg.carrier,
+    upstream: cfg.upstream,
     batchBytes: cfg.batchBytes
   };
 }
@@ -1405,6 +1414,7 @@ async function serveStatus(cfg, host, lang, wantsProbe) {
   const infoRows = [
     [bi("Version", "نسخه"), escapeHtml(VERSION)],
     [bi("Carrier", "حامل"), escapeHtml(cfg.carrier)],
+    [bi("Upstream", "مسیر به تلگرام"), cfg.upstream === "tcp" ? bi("raw TCP only", "فقط TCP مستقیم") : bi("kws WebSocket, TCP fallback", "WebSocket رسمی (kws)، با پشتیبان TCP")],
     [bi("Secret mode", "حالت سکرت"), secretMode],
     [bi("Max streams per session", "حداکثر استریم در هر نشست"), String(cfg.maxStreams)],
     [bi("AD_TAG", "AD_TAG"), cfg.adTag ? bi("set (ignored in Direct-DC mode)", "تنظیم شده (در حالت Direct-DC بی‌اثر)") : bi("not set", "تنظیم نشده")]
@@ -1414,6 +1424,7 @@ async function serveStatus(cfg, host, lang, wantsProbe) {
     [bi("Active sessions (isolate)", "نشست‌های فعال (این ایزوله)"), String(STATS.sessionsActive)],
     [bi("Streams opened", "استریم‌های باز شده"), String(STATS.streams)],
     [bi("DC connects ok / failed", "اتصال‌های DC موفق / ناموفق"), (STATS.dcAttempts - STATS.dcFails) + " / " + STATS.dcFails],
+    [bi("kws connects ok / failed", "اتصال‌های kws موفق / ناموفق"), (STATS.kwsAttempts - STATS.kwsFails) + " / " + STATS.kwsFails],
     [bi("Traffic up / down", "ترافیک بالا / پایین"), fmtBytes(STATS.bytesUp) + " / " + fmtBytes(STATS.bytesDown)],
     [bi("Rejected WS tokens", "توکن‌های WebSocket ردشده"), String(STATS.wsRejects)],
     [bi("Isolate uptime", "مدت فعالیت این ایزوله"), fmtDuration(Date.now() - ISOLATE_START)]
@@ -1595,6 +1606,11 @@ class Stream {
     this.socket = null;
     this.writer = null;
     this.reader = null;
+    this.kws = null;         // WebSocket to kwsN.web.telegram.org when that upstream is used
+    this.mode = 0;           // tagKind() of the client's transport
+    this.upTail = EMPTY;     // plaintext of an incomplete uplink packet (kws only)
+    this.downQueue = [];     // kws messages waiting for client credit
+    this.downQueued = 0;
     this.inQueue = [];
     this.inRunning = false;
     this.queuedLocal = 0;
@@ -1713,6 +1729,42 @@ class Stream {
     this.clientWritePos = 0;
     this.dcWritePos = 64;
     this.dcReadPos = 0;
+    this.mode = tagKind(tag);
+
+    // Obfuscated2 header for the Telegram side (identical for kws and raw TCP).
+    const dcHeader = new Uint8Array(64);
+    let safe = false;
+    for (let i = 0; i < 16 && !safe; i++) {
+      crypto.getRandomValues(dcHeader.subarray(0, 8));
+      safe = safeDcHeaderPrefix(dcHeader);
+    }
+    if (!safe) dcHeader.set([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0], 0);
+    dcHeader.set(dcKeyMaterial, 8);
+    dcHeader.set(tag, 56);
+    const dcView = new DataView(dcHeader.buffer);
+    dcView.setInt16(60, dcId, true);
+    dcView.setUint16(62, 0, true);
+    const encryptedTail = await ctrAt(this.dcWriteKey, this.dcWriteIv, 56, dcHeader.subarray(56, 64));
+    dcHeader.set(encryptedTail, 56);
+    if (this.dead) return;
+
+    // Preferred upstream: Telegram's own WebSocket frontends (the ones web.telegram.org
+    // uses). Media connections (negative DC id) go to the dedicated kwsN-1 media hosts.
+    // Raw TCP to the DC IPs below stays as the fallback (and the only path for DC 203).
+    if (this.session.cfg.upstream !== "tcp" && dcKey >= 1 && dcKey <= 5) {
+      const ws = await this.dialKws(dcKey, dcId < 0);
+      if (this.dead) {
+        if (ws) { try { ws.close(1000); } catch (_) {} }
+        return;
+      }
+      if (ws) {
+        this.kws = ws;
+        ws.send(dcHeader);
+        this.phase = "ready";
+        this.drainKws();
+        return;
+      }
+    }
 
     // Connect to the DC with bounded failover. Every connect() is a subrequest
     // (50 per invocation on Free) and occupies one of the 6 "connecting" slots,
@@ -1770,22 +1822,6 @@ class Stream {
     }
     this.writer = socket.writable.getWriter();
     this.reader = socket.readable.getReader();
-
-    // Construct and send initial Obfuscated2 header to the Telegram DC
-    const dcHeader = new Uint8Array(64);
-    let safe = false;
-    for (let i = 0; i < 16 && !safe; i++) {
-      crypto.getRandomValues(dcHeader.subarray(0, 8));
-      safe = safeDcHeaderPrefix(dcHeader);
-    }
-    if (!safe) dcHeader.set([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0], 0);
-    dcHeader.set(dcKeyMaterial, 8);
-    dcHeader.set(tag, 56);
-    const dcView = new DataView(dcHeader.buffer);
-    dcView.setInt16(60, dcId, true);
-    dcView.setUint16(62, 0, true);
-    const encryptedTail = await ctrAt(this.dcWriteKey, this.dcWriteIv, 56, dcHeader.subarray(56, 64));
-    dcHeader.set(encryptedTail, 56);
     await this.writer.write(dcHeader);
     if (this.dead) return;
     this.phase = "ready";
@@ -1797,6 +1833,11 @@ class Stream {
     const plain = await ctrAt(this.clientReadKey, this.clientReadIv, this.clientReadPos, payload);
     this.clientReadPos += payload.length;
     if (this.dead) return;
+    if (this.kws) {
+      await this.sendKws(plain);
+      this.grant(payload.length);
+      return;
+    }
     const encrypted = await ctrAt(this.dcWriteKey, this.dcWriteIv, this.dcWritePos, plain);
     this.dcWritePos += payload.length;
     await this.writer.write(encrypted);
@@ -1833,6 +1874,125 @@ class Stream {
     this.kill(true);
   }
 
+  // Opens wss://kwsN[-1].web.telegram.org/apiws. Media streams try the -1 media host
+  // first. Hosts that failed in the last minute are skipped, so a blocked kws costs
+  // at most one timeout per isolate per minute before falling back to raw TCP.
+  async dialKws(dc, media) {
+    const names = media ? [`kws${dc}-1`, `kws${dc}`] : [`kws${dc}`, `kws${dc}-1`];
+    const now = Date.now();
+    for (const name of names) {
+      if (this.dead) return null;
+      if (now - (DC_FAILED_AT.get(name) || 0) < DC_FAIL_TTL) continue;
+      STATS.kwsAttempts++;
+      let ws = null;
+      let timer = null;
+      try {
+        ws = new WebSocket(`wss://${name}.web.telegram.org/apiws`, "binary");
+        ws.binaryType = "arraybuffer";
+        await new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("kws timeout")), 4000);
+          ws.addEventListener("open", resolve, { once: true });
+          ws.addEventListener("error", reject, { once: true });
+          ws.addEventListener("close", reject, { once: true });
+        });
+        if (ws.protocol && ws.protocol !== "binary") throw new Error("kws protocol");
+        ws.addEventListener("message", (event) => this.onKwsData(event.data));
+        ws.addEventListener("close", () => this.kill(true));
+        ws.addEventListener("error", () => this.kill(true));
+        DC_FAILED_AT.delete(name);
+        return ws;
+      } catch (_) {
+        STATS.kwsFails++;
+        DC_FAILED_AT.set(name, Date.now());
+        logEvent("kws_fail", name);
+        if (ws) { try { ws.close(1000); } catch (_) {} }
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    return null;
+  }
+
+  // Uplink to kws: one WebSocket message per complete MTProto transport packet
+  // (abridged / intermediate / padded intermediate). Partial packets wait in upTail.
+  async sendKws(plain) {
+    const buf = this.upTail.length ? concat(this.upTail, plain) : plain;
+    const ends = [];
+    let offset = 0;
+    for (;;) {
+      const avail = buf.length - offset;
+      let headerLength;
+      let length;
+      if (this.mode === 1) {
+        if (avail < 1) break;
+        let words = buf[offset] & 0x7f;
+        if (words === 0x7f) {
+          if (avail < 4) break;
+          words = buf[offset + 1] | (buf[offset + 2] << 8) | (buf[offset + 3] << 16);
+          headerLength = 4;
+        } else {
+          headerLength = 1;
+        }
+        length = words * 4;
+      } else {
+        if (avail < 4) break;
+        length = (buf[offset] | (buf[offset + 1] << 8) | (buf[offset + 2] << 16) | (buf[offset + 3] << 24)) & 0x7fffffff;
+        headerLength = 4;
+      }
+      if (!length || length > KWS_MAX_PACKET) throw new Error("bad packet");
+      if (avail < headerLength + length) break;
+      offset += headerLength + length;
+      ends.push(offset);
+    }
+    this.upTail = offset === buf.length ? EMPTY : buf.slice(offset);
+    if (!offset) return;
+    const wire = await ctrAt(this.dcWriteKey, this.dcWriteIv, this.dcWritePos, buf.subarray(0, offset));
+    this.dcWritePos += offset;
+    if (this.dead || !this.kws) return;
+    let start = 0;
+    for (const end of ends) {
+      this.kws.send(wire.subarray(start, end));
+      start = end;
+    }
+  }
+
+  onKwsData(data) {
+    if (this.dead || !(data instanceof ArrayBuffer) || !data.byteLength) return;
+    this.downQueue.push(new Uint8Array(data));
+    this.downQueued += data.byteLength;
+    if (this.downQueued > this.session.cfg.maxQueued) {
+      this.kill(true);
+      return;
+    }
+    this.drainKws();
+  }
+
+  // Downlink from kws: fast mode bytes need no crypto; copy them straight into
+  // DATA frames of at most dataChunk bytes, limited by the client's credit.
+  drainKws() {
+    while (!this.dead && this.sendCredit > 0 && this.downQueued > 0) {
+      const size = Math.min(this.downQueued, this.sendCredit, this.session.cfg.dataChunk);
+      const out = new Uint8Array(8 + size);
+      out[0] = 0x02;
+      out[1] = (this.id >>> 16) & 0xff;
+      out[2] = (this.id >>> 8) & 0xff;
+      out[3] = this.id & 0xff;
+      new DataView(out.buffer).setUint32(4, size, false);
+      let offset = 8;
+      while (offset < out.length) {
+        const head = this.downQueue[0];
+        const take = Math.min(head.length, out.length - offset);
+        out.set(take === head.length ? head : head.subarray(0, take), offset);
+        offset += take;
+        if (take === head.length) this.downQueue.shift();
+        else this.downQueue[0] = head.subarray(take);
+      }
+      this.downQueued -= size;
+      this.sendCredit -= size;
+      this.session.sendFrame(out);
+    }
+  }
+
   waitCredit() {
     if (this.dead || this.sendCredit > 0) return Promise.resolve();
     return new Promise((resolve) => {
@@ -1843,6 +2003,7 @@ class Stream {
   addCredit(amount) {
     if (this.dead) return;
     this.sendCredit = Math.min(0xffffffff, this.sendCredit + amount);
+    if (this.kws) this.drainKws();
     if (this.creditResolve) {
       const resolve = this.creditResolve;
       this.creditResolve = null;
@@ -1883,6 +2044,13 @@ class Stream {
       try { this.socket.close().catch(() => {}); } catch (_) {}
       this.socket = null;
     }
+    if (this.kws) {
+      try { this.kws.close(1000); } catch (_) {}
+      this.kws = null;
+    }
+    this.downQueue.length = 0;
+    this.downQueued = 0;
+    this.upTail = EMPTY;
     if (notify && !this.session.closed) this.session.sendFrame(frame(0x03, this.id, EMPTY));
     this.session.onStreamClosed(this.id);
   }
