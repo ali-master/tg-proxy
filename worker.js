@@ -1708,10 +1708,10 @@ class Stream {
       this.kill(true);
       return;
     }
-    const copy = payload.slice();
-    this.inQueue.push(copy);
-    this.queuedLocal += copy.length;
-    this.session.queued += copy.length;
+    // No copy: payload views the WebSocket message's own ArrayBuffer, which is never reused.
+    this.inQueue.push(payload);
+    this.queuedLocal += payload.length;
+    this.session.queued += payload.length;
     if (this.session.queued > this.session.cfg.maxQueued) {
       this.kill(true);
       return;
@@ -1741,10 +1741,13 @@ class Stream {
           }
           continue;
         }
-        this.inQueue.shift();
-        this.queuedLocal -= payload.length;
-        this.session.queued -= payload.length;
-        await this.writeToDc(payload);
+        // Drain everything queued as one batch: one decrypt, one encrypt and one
+        // socket write instead of three awaits per small MTProto frame (CPU budget).
+        const parts = this.inQueue.splice(0);
+        const data = parts.length === 1 ? parts[0] : concat(...parts);
+        this.queuedLocal -= data.length;
+        this.session.queued -= data.length;
+        await this.writeToDc(data);
       }
     } catch (_) {
       this.kill(true);
