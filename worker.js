@@ -387,7 +387,7 @@ const pending=[],upPending=[],lanes=new Map(),closedLanes=new Set(),closedLaneOr
 const queueLimit=33554432,queueItemLimit=16384,closedLaneLimit=4096;
 const laneQueueLimit=8388608,laneItemLimit=1024,batchLimit=__BATCH_LIMIT__;
 let upSequence=1,downCursor='0',upRunning=false;
-let pingTimer=0,reconnectAttempts=0,reconnecting=false;
+let pingTimer=0,reconnectAttempts=0,reconnecting=false,laneOpenFailures=0;
 const openStreams=new Set();
 function trackFrames(value,up){
  const view=new DataView(value);let offset=0;
@@ -719,7 +719,7 @@ function openWebSocketLane(lane){
  const target=relayBase.replace(/^https:/,'wss:')+wsPath;
  const socket=new WebSocket(target,'tproxy-lane-v1.'+sessionToken+'.'+lane.id);
  lane.socket=socket;socket.binaryType='arraybuffer';
- socket.onopen=()=>{if(closed||lane.finished){socket.close();return}lane.opened=true;status('connected');runWebSocketLaneUp(lane)};
+ socket.onopen=()=>{if(closed||lane.finished){socket.close();return}lane.opened=true;laneOpenFailures=0;status('connected');runWebSocketLaneUp(lane)};
  socket.onmessage=event=>{
   if(!(event.data instanceof ArrayBuffer)||!event.data.byteLength){fail();return}
   let values;try{values=splitFrames(event.data)}catch(error){fail();return}
@@ -730,7 +730,9 @@ function openWebSocketLane(lane){
  socket.onerror=()=>{};
  socket.onclose=()=>{
   if(closed||lane.finished)return;
-  if(!lane.opened){fail();return}
+  // One lane failing to open closes only its own stream (Telegram reopens it);
+  // repeated failures in a row mean the carrier itself is broken.
+  if(!lane.opened){if(++laneOpenFailures>=3)fail();else finishWebSocketLane(lane,true);return}
   finishWebSocketLane(lane,!lane.localClosed&&!lane.remoteClosed);
  };
 }
