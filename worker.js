@@ -197,11 +197,21 @@ const LOG_LIMIT = 120;
 // spans every isolate; the status page only sees the isolate that serves it.
 function logEvent(event, detail, persist) {
   try {
-    const entry = { t: Date.now(), event: String(event).slice(0, 24), detail: String(detail || "").slice(0, 240) };
+    const entry = { t: Date.now(), event: String(event).slice(0, 24), detail: String(detail || "").slice(0, 400) };
     LOG.push(entry);
     if (LOG.length > LOG_LIMIT) LOG.splice(0, LOG.length - LOG_LIMIT);
     if (persist) console.log(`[tgproxy] ${entry.event} ${entry.detail}`);
   } catch (_) {}
+}
+
+// Any promise rejection nobody handled: log it with its stack (Workers Logs) instead of
+// an anonymous per-invocation exception, so the failing code path is identifiable.
+if (typeof addEventListener === "function") {
+  addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    logEvent("unhandled", (reason && (reason.stack || reason.message)) || String(reason), true);
+    event.preventDefault();
+  });
 }
 
 const PERMISSIONS_POLICY = "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), web-share=(), xr-spatial-tracking=()";
@@ -1578,15 +1588,15 @@ async function serveStatus(cfg, host, lang, wantsProbe) {
   const logsBlock = `<div class="card glass"><span class="card-title">${bi("Recent events", "رویدادهای اخیر")}</span><p class="muted">${bi("Newest first, kept in this isolate's memory only.", "جدیدترین اول، فقط در حافظه‌ی همین ایزوله.")}</p><div class="scroll"><table><thead><tr><th>UTC</th><th>${bi("Event", "رویداد")}</th><th>${bi("Detail", "جزئیات")}</th></tr></thead><tbody>${logRows || `<tr><td colspan="3" class="muted">-</td></tr>`}</tbody></table></div></div>`;
   const panelHref = "/" + encodeURIComponent(cfg.adminKey);
   const body = `${hero(bi("Status", "وضعیت"), bi("Everything, at a glance.", "همه‌چیز در یک نگاه."), bi(
-    "This page refreshes every 10 seconds, but it only sees the one Cloudflare isolate that served it; Telegram's connections are spread over many. For every connection, open Cloudflare → your Worker → <b>Logs</b> (lines start with <code>[tgproxy]</code>). No client IP addresses, tokens or secrets are recorded.",
-    "این صفحه هر ۱۰ ثانیه تازه می‌شود، ولی فقط همان ایزوله‌ای از کلودفلر را می‌بیند که صفحه را ساخته؛ اتصال‌های تلگرام بین ایزوله‌های زیادی پخش می‌شوند. برای دیدن همه‌ی اتصال‌ها در کلودفلر ورکر خود را باز کنید و به <b>Logs</b> بروید (خط‌هایی که با <code>[tgproxy]</code> شروع می‌شوند). هیچ IP، توکن یا سکرتی ثبت نمی‌شود."
+    "This page refreshes every 30 seconds, but it only sees the one Cloudflare isolate that served it; Telegram's connections are spread over many. For every connection, open Cloudflare → your Worker → <b>Logs</b> (lines start with <code>[tgproxy]</code>). No client IP addresses, tokens or secrets are recorded.",
+    "این صفحه هر ۳۰ ثانیه تازه می‌شود، ولی فقط همان ایزوله‌ای از کلودفلر را می‌بیند که صفحه را ساخته؛ اتصال‌های تلگرام بین ایزوله‌های زیادی پخش می‌شوند. برای دیدن همه‌ی اتصال‌ها در کلودفلر ورکر خود را باز کنید و به <b>Logs</b> بروید (خط‌هایی که با <code>[tgproxy]</code> شروع می‌شوند). هیچ IP، توکن یا سکرتی ثبت نمی‌شود."
   ))}
 <div class="tiles">${tiles}</div>
 <div class="card glass"><span class="card-title">${bi("Configuration", "پیکربندی")}</span><table>${infoRows}</table></div>
 ${probeBlock}
 ${logsBlock}
 <a class="ghost" href="${escapeHtml(panelHref)}">${bi("Back to panel", "بازگشت به پنل")}</a>`;
-  return new Response(bilingualPage("Status", lang, body, await unseal(), wantsProbe ? 0 : 10), { status: 200, headers: pageHeaders() });
+  return new Response(bilingualPage("Status", lang, body, await unseal(), wantsProbe ? 0 : 30), { status: 200, headers: pageHeaders() });
 }
 
 async function issueToken(cfg, kind, ttl, mode) {
@@ -1957,6 +1967,9 @@ class Stream {
             settled = true;
             ctl.done = true;
             clearTimeout(timer);
+            // TCP only runs for a media stream once kws failed or stalled past the
+            // stagger: skip that kws host in this isolate for a while.
+            if (result.socket && kwsAllowed && dcId < 0) DC_FAILED_AT.set(`kws${dcKey}-1`, Date.now());
             resolve(result);
           } else if (result) {
             closeUpstream(result);
@@ -2019,16 +2032,28 @@ class Stream {
     STATS.kwsAttempts++;
     let ws = null;
     let timer = null;
+    // fetch() + Upgrade, not `new WebSocket()`: a stalled handshake then fails as a
+    // rejected promise (with the HTTP status when there is one) and can be aborted
+    // cleanly. Closing a still-CONNECTING `new WebSocket()` surfaced in production as
+    // uncaught "internal error" exceptions on every lane.
+    const abort = new AbortController();
     try {
-      ws = new WebSocket(`wss://${name}.web.telegram.org/apiws`, "binary");
-      ws.binaryType = "arraybuffer";
-      await new Promise((resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("timeout")), KWS_TIMEOUT);
-        ws.addEventListener("open", resolve, { once: true });
-        ws.addEventListener("error", () => reject(new Error("error")), { once: true });
-        ws.addEventListener("close", (event) => reject(new Error("closed " + event.code)), { once: true });
+      timer = setTimeout(() => abort.abort(new Error("timeout")), KWS_TIMEOUT);
+      const response = await fetch(`https://${name}.web.telegram.org/apiws`, {
+        headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": "binary" },
+        signal: abort.signal
       });
-      if (ws.protocol && ws.protocol !== "binary") throw new Error("protocol " + ws.protocol);
+      clearTimeout(timer);
+      timer = null;
+      ws = response.webSocket;
+      if (!ws) {
+        try { response.body && response.body.cancel().catch(() => {}); } catch (_) {}
+        throw new Error("HTTP " + response.status);
+      }
+      ws.binaryType = "arraybuffer";
+      ws.accept();
+      const protocol = response.headers.get("sec-websocket-protocol");
+      if (protocol && protocol !== "binary") throw new Error("protocol " + protocol);
       DC_FAILED_AT.delete(name);
       if (this.dead || ctl.done) { ws.close(1000); return null; }
       return { ws, name };
