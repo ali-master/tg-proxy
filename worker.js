@@ -921,11 +921,11 @@ async function ctrAt(key, iv, position, data) {
   const skip = position % 16;
   const counter = add128(iv, block);
   if (skip === 0) {
-    return new Uint8Array(await crypto.subtle.encrypt({ name: "AES-CTR", counter, length: 64 }, key, data));
+    return new Uint8Array(await crypto.subtle.encrypt({ name: "AES-CTR", counter, length: 128 }, key, data));
   }
   const input = new Uint8Array(skip + data.length);
   input.set(data, skip);
-  const out = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-CTR", counter, length: 64 }, key, input));
+  const out = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-CTR", counter, length: 128 }, key, input));
   return out.subarray(skip);
 }
 
