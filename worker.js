@@ -1611,6 +1611,7 @@ class Stream {
     this.upTail = EMPTY;     // plaintext of an incomplete uplink packet (kws only)
     this.downQueue = [];     // kws messages waiting for client credit
     this.downQueued = 0;
+    this.drainTimer = 0;
     this.inQueue = [];
     this.inRunning = false;
     this.queuedLocal = 0;
@@ -1964,7 +1965,10 @@ class Stream {
       this.kill(true);
       return;
     }
-    this.drainKws();
+    // kws often delivers many small messages; waiting 1 ms coalesces them into
+    // fewer, larger DATA frames (fewer ws.send calls = less CPU per byte).
+    if (this.downQueued >= this.session.cfg.dataChunk) this.drainKws();
+    else if (!this.drainTimer) this.drainTimer = setTimeout(() => { this.drainTimer = 0; this.drainKws(); }, 1);
   }
 
   // Downlink from kws: fast mode bytes need no crypto; copy them straight into
@@ -2048,6 +2052,8 @@ class Stream {
       try { this.kws.close(1000); } catch (_) {}
       this.kws = null;
     }
+    if (this.drainTimer) clearTimeout(this.drainTimer);
+    this.drainTimer = 0;
     this.downQueue.length = 0;
     this.downQueued = 0;
     this.upTail = EMPTY;
