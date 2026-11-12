@@ -2263,7 +2263,12 @@ async function serveWebSocket(request, cfg, host, port) {
   server.accept();
   const session = new WsSession(server, cfg, secret, laneId);
   server.addEventListener("message", (event) => session.enqueue(event.data));
-  server.addEventListener("close", () => session.dispose());
+  server.addEventListener("close", () => {
+    session.dispose();
+    // Answer the client's close frame so the socket (and this invocation) end now
+    // even on compatibility dates without automatic close replies. Throws if already closed.
+    try { server.close(1000, "closed"); } catch (_) {}
+  });
   server.addEventListener("error", () => session.dispose());
   return new Response(null, {
     status: 101,
