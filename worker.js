@@ -1771,7 +1771,9 @@ class Stream {
     this.connectMs = 0;
     this.openedAt = Date.now();
     this.bytesUp = 0;
-    this.bytesDown = 0;
+    this.bytesDown = 0;     // received from Telegram
+    this.bytesSent = 0;     // framed to the client
+    this.bytesAcked = 0;    // WINDOW credit the client returned (bytes it actually consumed)
     this.inQueue = [];
     this.inRunning = false;
     this.queuedLocal = 0;
@@ -2185,6 +2187,7 @@ class Stream {
       }
       this.downQueued -= size;
       this.sendCredit -= size;
+      this.bytesSent += size;
       this.session.sendFrame(out);
     }
     if (this.drainResolve && this.downQueued < DOWN_HIGH_WATER) {
@@ -2197,6 +2200,7 @@ class Stream {
   addCredit(amount) {
     if (this.dead) return;
     this.sendCredit = Math.min(0xffffffff, this.sendCredit + amount);
+    this.bytesAcked += amount;
     this.drainDown();
   }
 
@@ -2210,7 +2214,7 @@ class Stream {
     if (this.dead) return;
     this.dead = true;
     // One summary line per stream: this is what Workers Logs shows across isolates.
-    logEvent("stream_end", `dc=${this.dcId} via=${this.upstream || "-"} connect=${this.connectMs}ms life=${fmtDuration(Date.now() - this.openedAt)} up=${fmtBytes(this.bytesUp)} down=${fmtBytes(this.bytesDown)} why=${reason || (notify ? "error" : "client closed")}`, true);
+    logEvent("stream_end", `dc=${this.dcId} via=${this.upstream || "-"} connect=${this.connectMs}ms life=${fmtDuration(Date.now() - this.openedAt)} up=${fmtBytes(this.bytesUp)} down=${fmtBytes(this.bytesDown)} sent=${fmtBytes(this.bytesSent)} acked=${fmtBytes(this.bytesAcked)} why=${reason || (notify ? "error" : "client closed")}`, true);
     this.session.streams.delete(this.id);
     this.session.remember(this.id);
     this.session.queued -= this.queuedLocal;
